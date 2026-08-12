@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
 <title>家計帳</title>
 
 <script>
@@ -24,8 +24,9 @@
 
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@500;700&family=Noto+Sans+JP:wght@400;500;700&family=JetBrains+Mono:wght@500;700&display=swap');
-  * { box-sizing: border-box; }
-  body { margin: 0; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  #root { height: 100%; }
   .serif { font-family: 'Shippori Mincho', serif; }
   .sans { font-family: 'Noto Sans JP', sans-serif; }
   .num { font-family: 'JetBrains Mono', monospace; }
@@ -45,15 +46,28 @@ const C = {
 };
 const STAMP_COLORS = ["#B23A2E", "#2E5E8C", "#4B7A5B", "#8C6A2E", "#6A4B8C", "#2E8C82"];
 
-const fmtYen = (n) => `¥${Number(n || 0).toLocaleString("ja-JP")}`;
+const fmtYen = (n) => `¥${Math.round(Number(n || 0)).toLocaleString("ja-JP")}`;
 const todayISO = () => new Date().toISOString().slice(0, 10);
+const pad2 = (n) => String(n).padStart(2, "0");
 const monthKeyOf = (iso) => iso.slice(0, 7);
 const fmtDateJp = (iso) => {
   const d = new Date(iso + "T00:00:00");
   return `${d.getMonth() + 1}月${d.getDate()}日`;
 };
+const fmtMonthJp = (mk) => {
+  const [y, m] = mk.split("-").map(Number);
+  return `${y}年${m}月`;
+};
+const shiftMonth = (mk, delta) => {
+  let [y, m] = mk.split("-").map(Number);
+  m += delta;
+  while (m > 12) { m -= 12; y += 1; }
+  while (m < 1) { m += 12; y -= 1; }
+  return `${y}-${pad2(m)}`;
+};
+const daysInMonth = (y, m) => new Date(y, m, 0).getDate();
 
-const Icon = ({ children, size = 18, color = C.inkSoft }) => (
+const Icon = ({ children, size = 16, color = C.inkSoft }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     {children}
   </svg>
@@ -64,8 +78,12 @@ const TagIcon = (p) => <Icon {...p}><path d="M4 11V4h7l9 9-7 7-9-9z"/><circle cx
 const UsersIcon = (p) => <Icon {...p}><circle cx="8" cy="8" r="3"/><circle cx="16" cy="9" r="3"/><path d="M2 20c0-3.3 2.7-6 6-6s6 2.7 6 6M13 14c3 0 6 2.5 6 6"/></Icon>;
 const XIcon = (p) => <Icon {...p}><path d="M6 6l12 12M18 6L6 18"/></Icon>;
 const TrashIcon = (p) => <Icon {...p}><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></Icon>;
+const ChevLeft = (p) => <Icon {...p}><path d="M15 6l-6 6 6 6"/></Icon>;
+const ChevRight = (p) => <Icon {...p}><path d="M9 6l6 6-6 6"/></Icon>;
+const RepeatIcon = (p) => <Icon {...p}><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></Icon>;
+const BackspaceIcon = (p) => <Icon {...p}><path d="M21 4H8l-6 8 6 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/><path d="M14 10l-4 4M10 10l4 4"/></Icon>;
 
-function Stamp({ member, size = 34 }) {
+function Stamp({ member, size = 32 }) {
   if (!member) return null;
   return (
     <div style={{
@@ -78,30 +96,47 @@ function Stamp({ member, size = 34 }) {
   );
 }
 
+function computeTotal(tokens, current) {
+  const cur = Number(current) || 0;
+  if (tokens.length === 0) return cur;
+  let result = tokens[0];
+  for (let j = 1; j < tokens.length; j += 2) {
+    const op = tokens[j];
+    const num = (j + 1 < tokens.length) ? tokens[j + 1] : cur;
+    result = op === "+" ? result + num : result - num;
+  }
+  return result;
+}
+
 function App() {
   const [db, setDb] = useState(null);
   const [loading, setLoading] = useState(true);
   const [members, setMembers] = useState([]);
   const [entries, setEntries] = useState([]);
+  const [recurring, setRecurring] = useState([]);
   const [tags, setTags] = useState([]);
   const [view, setView] = useState("home");
   const [error, setError] = useState("");
+  const [viewMonth, setViewMonth] = useState(monthKeyOf(todayISO()));
 
   const [newName, setNewName] = useState("");
-  const [newEmail, setNewEmail] = useState("");
   const [newTag, setNewTag] = useState("");
-  const [amount, setAmount] = useState("");
+
+  const [calcTokens, setCalcTokens] = useState([]);
+  const [calcInput, setCalcInput] = useState("0");
   const [tag, setTag] = useState("");
   const [memo, setMemo] = useState("");
   const [date, setDate] = useState(todayISO());
   const [memberId, setMemberId] = useState(null);
+  const [isRecurring, setIsRecurring] = useState(false);
+  const [freq, setFreq] = useState("monthly");
 
   useEffect(() => {
     try {
-      const app = firebase.initializeApp(window.FIREBASE_CONFIG);
+      firebase.initializeApp(window.FIREBASE_CONFIG);
       setDb(firebase.firestore());
     } catch (err) {
-      setError("Firebaseへの接続に失敗しました。設定を確認してください。");
+      setError("Firebaseへの接続に失敗しました。");
       setLoading(false);
     }
   }, []);
@@ -109,44 +144,39 @@ function App() {
   useEffect(() => {
     if (!db) return;
     let loadedCount = 0;
-    const markLoaded = () => { loadedCount++; if (loadedCount >= 3) setLoading(false); };
+    let done = false;
+    const markLoaded = () => { loadedCount++; if (loadedCount >= 4 && !done) { done = true; setLoading(false); } };
+    const timeout = setTimeout(() => {
+      if (!done) { done = true; setError("接続がタイムアウトしました。Firestoreの設定を確認してください。"); setLoading(false); }
+    }, 10000);
 
     const unsubM = db.collection("members").onSnapshot((snap) => {
-      setMembers(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      markLoaded();
+      setMembers(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); markLoaded();
     }, () => { setError("メンバーの取得に失敗しました。"); markLoaded(); });
-
     const unsubT = db.collection("tags").onSnapshot((snap) => {
-      setTags(snap.docs.map((d) => d.data().name));
-      markLoaded();
+      setTags(snap.docs.map((d) => d.data().name)); markLoaded();
     }, () => { setError("タグの取得に失敗しました。"); markLoaded(); });
-
     const unsubE = db.collection("entries").onSnapshot((snap) => {
-      setEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      markLoaded();
+      setEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); markLoaded();
     }, () => { setError("記録の取得に失敗しました。"); markLoaded(); });
+    const unsubR = db.collection("recurring").onSnapshot((snap) => {
+      setRecurring(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); markLoaded();
+    }, () => { setError("繰り返し設定の取得に失敗しました。"); markLoaded(); });
 
-    return () => { unsubM(); unsubT(); unsubE(); };
+    return () => { clearTimeout(timeout); unsubM(); unsubT(); unsubE(); unsubR(); };
   }, [db]);
 
-  useEffect(() => {
-    if (members.length && !memberId) setMemberId(members[0].id);
-  }, [members]);
-  useEffect(() => {
-    if (tags.length && !tag) setTag(tags[0]);
-  }, [tags]);
+  useEffect(() => { if (members.length && !memberId) setMemberId(members[0].id); }, [members]);
+  useEffect(() => { if (tags.length && !tag) setTag(tags[0]); }, [tags]);
 
   const addMember = async () => {
-    if (!newName.trim() || !newEmail.trim() || !db) return;
+    if (!newName.trim() || !db) return;
     const color = STAMP_COLORS[members.length % STAMP_COLORS.length];
-    try {
-      await db.collection("members").add({ name: newName.trim(), email: newEmail.trim(), color });
-      setNewName(""); setNewEmail("");
-    } catch { setError("メンバーの追加に失敗しました。"); }
+    try { await db.collection("members").add({ name: newName.trim(), color }); setNewName(""); }
+    catch { setError("メンバーの追加に失敗しました。"); }
   };
   const removeMember = async (id) => {
-    try { await db.collection("members").doc(id).delete(); }
-    catch { setError("削除に失敗しました。"); }
+    try { await db.collection("members").doc(id).delete(); } catch { setError("削除に失敗しました。"); }
   };
   const addTag = async () => {
     const t = newTag.trim();
@@ -160,23 +190,59 @@ function App() {
       await Promise.all(snap.docs.map((d) => d.ref.delete()));
     } catch { setError("削除に失敗しました。"); }
   };
+
+  const resetCalc = () => { setCalcTokens([]); setCalcInput("0"); };
+  const pressDigit = (d) => setCalcInput((cur) => (cur === "0" ? d : cur.length < 9 ? cur + d : cur));
+  const pressBackspace = () => setCalcInput((cur) => (cur.length > 1 ? cur.slice(0, -1) : "0"));
+  const pressOp = (op) => { setCalcTokens((t) => [...t, Number(calcInput) || 0, op]); setCalcInput("0"); };
+  const pressEquals = () => { const r = computeTotal(calcTokens, calcInput); setCalcTokens([]); setCalcInput(String(r)); };
+  const liveTotal = useMemo(() => computeTotal(calcTokens, calcInput), [calcTokens, calcInput]);
+  const exprPreview = useMemo(() => {
+    const parts = calcTokens.map((t, i) => (typeof t === "number" ? t.toLocaleString("ja-JP") : t));
+    return [...parts, calcInput].join(" ");
+  }, [calcTokens, calcInput]);
+
   const addEntry = async () => {
-    const val = Number(amount);
+    const val = Math.round(liveTotal);
     if (!val || val <= 0 || !memberId || !tag || !db) return;
     try {
-      await db.collection("entries").add({
-        amount: val, tag, memo: memo.trim(), date, memberId,
-      });
-      setAmount(""); setMemo(""); setView("home");
+      if (isRecurring) {
+        await db.collection("recurring").add({ amount: val, tag, memo: memo.trim(), memberId, anchorDate: date, frequency: freq });
+      } else {
+        await db.collection("entries").add({ amount: val, tag, memo: memo.trim(), date, memberId });
+      }
+      resetCalc(); setMemo(""); setIsRecurring(false); setView("home");
     } catch { setError("記録の保存に失敗しました。"); }
   };
-  const removeEntry = async (id) => {
-    try { await db.collection("entries").doc(id).delete(); }
-    catch { setError("削除に失敗しました。"); }
+  const removeEntry = async (e) => {
+    try {
+      if (e.isRecurring) await db.collection("recurring").doc(e.recurringId).delete();
+      else await db.collection("entries").doc(e.id).delete();
+    } catch { setError("削除に失敗しました。"); }
   };
 
-  const thisMonth = monthKeyOf(todayISO());
-  const monthEntries = useMemo(() => entries.filter((e) => monthKeyOf(e.date) === thisMonth), [entries, thisMonth]);
+  // 選択中の月について、実際の記録 + 繰り返しの仮想記録 を合成する
+  const monthEntries = useMemo(() => {
+    const [y, m] = viewMonth.split("-").map(Number);
+    const actual = entries.filter((e) => monthKeyOf(e.date) === viewMonth);
+    const virtual = [];
+    recurring.forEach((r) => {
+      if (!r.anchorDate) return;
+      const [ay, am, ad] = r.anchorDate.split("-").map(Number);
+      if (r.frequency === "monthly") {
+        if (y > ay || (y === ay && m >= am)) {
+          const day = Math.min(ad, daysInMonth(y, m));
+          virtual.push({ id: `rec_${r.id}_${viewMonth}`, amount: r.amount, tag: r.tag, memo: r.memo, memberId: r.memberId, date: `${y}-${pad2(m)}-${pad2(day)}`, isRecurring: true, recurringId: r.id, freq: r.frequency });
+        }
+      } else if (r.frequency === "yearly") {
+        if (m === am && y >= ay) {
+          virtual.push({ id: `rec_${r.id}_${viewMonth}`, amount: r.amount, tag: r.tag, memo: r.memo, memberId: r.memberId, date: `${y}-${pad2(am)}-${pad2(ad)}`, isRecurring: true, recurringId: r.id, freq: r.frequency });
+        }
+      }
+    });
+    return [...actual, ...virtual];
+  }, [entries, recurring, viewMonth]);
+
   const monthTotal = useMemo(() => monthEntries.reduce((s, e) => s + Number(e.amount), 0), [monthEntries]);
 
   const byTag = useMemo(() => {
@@ -193,239 +259,286 @@ function App() {
   }, [monthEntries]);
   const maxMember = byMember.length ? byMember[0][1] : 1;
 
+  const split = useMemo(() => {
+    if (members.length !== 2) return null;
+    const [m1, m2] = members;
+    const s1 = monthEntries.filter((e) => e.memberId === m1.id).reduce((s, e) => s + Number(e.amount), 0);
+    const s2 = monthEntries.filter((e) => e.memberId === m2.id).reduce((s, e) => s + Number(e.amount), 0);
+    const total = s1 + s2;
+    if (total === 0) return { even: true };
+    const low = s1 <= s2 ? m1 : m2;
+    const high = s1 <= s2 ? m2 : m1;
+    const lowSum = Math.min(s1, s2);
+    const amount = (total - lowSum) / 2;
+    if (Math.round(amount) === 0) return { even: true };
+    return { payer: low, receiver: high, amount };
+  }, [members, monthEntries]);
+
   const grouped = useMemo(() => {
     const map = {};
-    entries.forEach((e) => { map[e.date] = map[e.date] || []; map[e.date].push(e); });
+    monthEntries.forEach((e) => { map[e.date] = map[e.date] || []; map[e.date].push(e); });
     return Object.entries(map).sort((a, b) => (a[0] < b[0] ? 1 : -1));
-  }, [entries]);
+  }, [monthEntries]);
 
   const memberOf = (id) => members.find((m) => m.id === id);
 
   if (loading) {
-    return <div style={{ background: C.paper, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+    return <div style={{ background: C.paper, height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
       <p className="sans" style={{ color: C.inkSoft }}>読み込み中…</p>
     </div>;
   }
 
+  const page = { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" };
+  const scrollArea = { flex: 1, minHeight: 0, overflowY: "auto" };
+
   return (
-    <div style={{ background: C.paper, minHeight: "100vh" }}>
-      <div style={{ maxWidth: 448, margin: "0 auto", minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-        <div style={{ background: C.ink, borderBottom: `4px double ${C.stamp}55`, padding: "32px 24px 24px" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <h1 className="serif" style={{ color: C.paper, fontSize: 22, letterSpacing: 1, margin: 0 }}>家計帳</h1>
-            <span className="sans" style={{ color: "#ffffff88", fontSize: 12 }}>{thisMonth.replace("-", "年")}月</span>
-          </div>
-          <p className="sans" style={{ color: "#ffffffaa", fontSize: 12, marginTop: 2 }}>みんなで記録する共有家計簿</p>
-          <div style={{ marginTop: 16 }}>
-            <span className="sans" style={{ color: "#ffffff99", fontSize: 12 }}>今月の合計</span>
-            <div className="num" style={{ color: C.paper, fontSize: 34, fontWeight: 700, lineHeight: 1.2 }}>{fmtYen(monthTotal)}</div>
-          </div>
-        </div>
+    <div style={{ background: C.paper, height: "100%", display: "flex", justifyContent: "center" }}>
+      <div style={{ width: "100%", maxWidth: 448, height: "100%", display: "flex", flexDirection: "column" }}>
 
         {error && (
-          <div className="sans" style={{ margin: "12px 24px 0", padding: "8px 12px", background: "#fff", border: `1px solid ${C.stamp}`, color: C.stamp, borderRadius: 6, fontSize: 13 }}>{error}</div>
+          <div className="sans" style={{ padding: "6px 16px", background: "#fff", borderBottom: `1px solid ${C.stamp}`, color: C.stamp, fontSize: 11 }}>{error}</div>
         )}
 
-        <div style={{ flex: 1, padding: "20px 24px", overflowY: "auto" }}>
-          {view === "home" && (
-            <React.Fragment>
-              {byTag.length > 0 && (
-                <div style={{ marginBottom: 24 }}>
-                  <h2 className="serif" style={{ color: C.ink, fontSize: 15, marginBottom: 10 }}>タグ別内訳</h2>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {byTag.map(([t, sum]) => (
-                      <div key={t} style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                        <span className="sans" style={{ width: 72, fontSize: 12, color: C.inkSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t}</span>
-                        <div style={{ flex: 1, height: 8, borderRadius: 999, background: C.paperDeep }}>
-                          <div style={{ width: `${(sum / maxTag) * 100}%`, height: 8, borderRadius: 999, background: C.stamp, opacity: 0.75 }} />
-                        </div>
-                        <span className="num" style={{ fontSize: 12, color: C.ink, width: 64, textAlign: "right" }}>{fmtYen(sum)}</span>
+        {view === "home" && (
+          <div style={page}>
+            <div style={{ background: C.ink, padding: "14px 20px 12px", flexShrink: 0 }}>
+              <h1 className="serif" style={{ color: C.paper, fontSize: 17, margin: 0 }}>家計帳</h1>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginTop: 4 }}>
+                <button onClick={() => setViewMonth((v) => shiftMonth(v, -1))} style={{ background: "none", padding: 2 }}><ChevLeft color="#fff" size={16} /></button>
+                <span className="sans" style={{ color: "#fff", fontSize: 13 }}>{fmtMonthJp(viewMonth)}</span>
+                <button onClick={() => setViewMonth((v) => shiftMonth(v, 1))} style={{ background: "none", padding: 2 }}><ChevRight color="#fff" size={16} /></button>
+              </div>
+              <div style={{ textAlign: "center", marginTop: 4 }}>
+                <span className="sans" style={{ color: "#ffffff99", fontSize: 10 }}>合計</span>
+                <div className="num" style={{ color: C.paper, fontSize: 26, fontWeight: 700, lineHeight: 1.2 }}>{fmtYen(monthTotal)}</div>
+              </div>
+            </div>
+
+            {split && (
+              <div className="sans" style={{ flexShrink: 0, margin: "8px 16px 0", padding: "8px 12px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8, fontSize: 12, color: C.ink, display: "flex", alignItems: "center", gap: 6 }}>
+                {split.even ? "🧮 今のところ割り勘の差はありません" : (
+                  <React.Fragment>
+                    <Stamp member={split.payer} size={20} />
+                    <span>{split.payer.name}が{split.receiver.name}に</span>
+                    <span className="num" style={{ fontWeight: 700 }}>{fmtYen(split.amount)}</span>
+                    <span>払う</span>
+                  </React.Fragment>
+                )}
+              </div>
+            )}
+
+            <div style={{ flexShrink: 0, display: "flex", gap: 10, margin: "8px 16px 0" }}>
+              <div style={{ flex: 1 }}>
+                <div className="sans" style={{ fontSize: 10, color: C.inkSoft, marginBottom: 3 }}>タグ別</div>
+                {byTag.slice(0, 3).map(([t, sum]) => (
+                  <div key={t} style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
+                    <span className="sans" style={{ fontSize: 9, color: C.inkSoft, width: 36, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t}</span>
+                    <div style={{ flex: 1, height: 4, borderRadius: 999, background: C.paperDeep }}>
+                      <div style={{ width: `${(sum / maxTag) * 100}%`, height: 4, borderRadius: 999, background: C.stamp, opacity: 0.75 }} />
+                    </div>
+                    <span className="num" style={{ fontSize: 9, color: C.ink }}>{fmtYen(sum)}</span>
+                  </div>
+                ))}
+                {byTag.length === 0 && <div className="sans" style={{ fontSize: 10, color: C.inkSoft }}>記録なし</div>}
+              </div>
+              <div style={{ flex: 1 }}>
+                <div className="sans" style={{ fontSize: 10, color: C.inkSoft, marginBottom: 3 }}>人別</div>
+                {byMember.slice(0, 3).map(([mid, sum]) => {
+                  const m = memberOf(mid);
+                  if (!m) return null;
+                  return (
+                    <div key={mid} style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
+                      <span className="sans" style={{ fontSize: 9, color: C.inkSoft, width: 30, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</span>
+                      <div style={{ flex: 1, height: 4, borderRadius: 999, background: C.paperDeep }}>
+                        <div style={{ width: `${(sum / maxMember) * 100}%`, height: 4, borderRadius: 999, background: m.color, opacity: 0.75 }} />
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+                      <span className="num" style={{ fontSize: 9, color: C.ink }}>{fmtYen(sum)}</span>
+                    </div>
+                  );
+                })}
+                {byMember.length === 0 && <div className="sans" style={{ fontSize: 10, color: C.inkSoft }}>記録なし</div>}
+              </div>
+            </div>
 
-              {byMember.length > 0 && (
-                <div style={{ marginBottom: 24 }}>
-                  <h2 className="serif" style={{ color: C.ink, fontSize: 15, marginBottom: 10 }}>人別内訳</h2>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {byMember.map(([mid, sum]) => {
-                      const m = memberOf(mid);
-                      if (!m) return null;
-                      return (
-                        <div key={mid} style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                          <Stamp member={m} size={22} />
-                          <span className="sans" style={{ width: 52, fontSize: 12, color: C.inkSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</span>
-                          <div style={{ flex: 1, height: 8, borderRadius: 999, background: C.paperDeep }}>
-                            <div style={{ width: `${(sum / maxMember) * 100}%`, height: 8, borderRadius: 999, background: m.color, opacity: 0.75 }} />
-                          </div>
-                          <span className="num" style={{ fontSize: 12, color: C.ink, width: 64, textAlign: "right" }}>{fmtYen(sum)}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              <h2 className="serif" style={{ color: C.ink, fontSize: 15, marginBottom: 6 }}>履歴</h2>
-              {entries.length === 0 ? (
-                <div className="sans" style={{ textAlign: "center", padding: "40px 0", color: C.inkSoft, fontSize: 13, border: `1px dashed ${C.line}`, borderRadius: 10 }}>
-                  まだ記録がありません。右下から最初の支出を記録しましょう。
+            <div style={{ ...scrollArea, margin: "8px 16px 8px" }}>
+              {monthEntries.length === 0 ? (
+                <div className="sans" style={{ textAlign: "center", padding: "24px 0", color: C.inkSoft, fontSize: 12, border: `1px dashed ${C.line}`, borderRadius: 10 }}>
+                  この月の記録はまだありません。
                 </div>
               ) : grouped.map(([d, list]) => (
-                <div key={d} style={{ marginBottom: 16 }}>
-                  <div className="sans" style={{ color: C.inkSoft, fontSize: 11, marginBottom: 4 }}>{fmtDateJp(d)}</div>
-                  <div style={{ background: "#fff", borderRadius: 10, border: `1px solid ${C.line}` }}>
+                <div key={d} style={{ marginBottom: 8 }}>
+                  <div className="sans" style={{ color: C.inkSoft, fontSize: 10, marginBottom: 3 }}>{fmtDateJp(d)}</div>
+                  <div style={{ background: "#fff", borderRadius: 8, border: `1px solid ${C.line}` }}>
                     {list.map((e, i) => (
-                      <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px", borderBottom: i < list.length - 1 ? `1px solid ${C.line}` : "none" }}>
-                        <Stamp member={memberOf(e.memberId)} size={30} />
+                      <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderBottom: i < list.length - 1 ? `1px solid ${C.line}` : "none" }}>
+                        <Stamp member={memberOf(e.memberId)} size={24} />
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div className="sans" style={{ color: C.ink, fontSize: 13, fontWeight: 500 }}>{e.tag}</div>
-                          {e.memo && <div className="sans" style={{ color: C.inkSoft, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.memo}</div>}
+                          <div className="sans" style={{ color: C.ink, fontSize: 12, fontWeight: 500, display: "flex", alignItems: "center", gap: 3 }}>
+                            {e.tag}
+                            {e.isRecurring && <RepeatIcon size={11} color={C.moss} />}
+                          </div>
+                          {e.memo && <div className="sans" style={{ color: C.inkSoft, fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.memo}</div>}
                         </div>
-                        <div className="num" style={{ color: C.ink, fontSize: 14, fontWeight: 700 }}>{fmtYen(e.amount)}</div>
-                        <button onClick={() => removeEntry(e.id)} style={{ background: "none" }} aria-label="削除"><TrashIcon /></button>
+                        <div className="num" style={{ color: C.ink, fontSize: 13, fontWeight: 700 }}>{fmtYen(e.amount)}</div>
+                        <button onClick={() => removeEntry(e)} style={{ background: "none" }} aria-label="削除"><TrashIcon size={13} /></button>
                       </div>
                     ))}
                   </div>
                 </div>
               ))}
-            </React.Fragment>
-          )}
-
-          {view === "add" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-              <h2 className="serif" style={{ color: C.ink, fontSize: 16, margin: 0 }}>支出を記録</h2>
-              {(members.length === 0 || tags.length === 0) ? (
-                <p className="sans" style={{ color: C.inkSoft, fontSize: 13 }}>
-                  {members.length === 0 && "先に「メンバー」タブから記録する人を追加してください。"}
-                  {members.length === 0 && tags.length === 0 && <br />}
-                  {tags.length === 0 && "先に「タグ」タブからタグを追加してください。"}
-                </p>
-              ) : (
-                <React.Fragment>
-                  <div>
-                    <label className="sans" style={{ fontSize: 12, color: C.inkSoft }}>金額</label>
-                    <div style={{ display: "flex", alignItems: "center", marginTop: 4, padding: "8px 12px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }}>
-                      <span className="num" style={{ color: C.inkSoft, marginRight: 4 }}>¥</span>
-                      <input type="number" inputMode="numeric" value={amount} onChange={(ev) => setAmount(ev.target.value)}
-                        placeholder="0" className="num" style={{ flex: 1, border: "none", outline: "none", fontSize: 20, color: C.ink, background: "transparent" }} />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="sans" style={{ fontSize: 12, color: C.inkSoft }}>タグ</label>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
-                      {tags.map((t) => (
-                        <button key={t} onClick={() => setTag(t)} className="sans" style={{
-                          borderRadius: 999, padding: "6px 12px", fontSize: 12,
-                          border: `1px solid ${tag === t ? C.ink : C.line}`,
-                          background: tag === t ? C.ink : "#fff", color: tag === t ? C.paper : C.inkSoft,
-                        }}>{t}</button>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <label className="sans" style={{ fontSize: 12, color: C.inkSoft }}>メモ(任意)</label>
-                    <input value={memo} onChange={(ev) => setMemo(ev.target.value)} placeholder="例)スーパーで食材"
-                      className="sans" style={{ width: "100%", marginTop: 4, padding: "8px 12px", outline: "none", fontSize: 13, color: C.ink, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }} />
-                  </div>
-                  <div>
-                    <label className="sans" style={{ fontSize: 12, color: C.inkSoft }}>日付</label>
-                    <input type="date" value={date} onChange={(ev) => setDate(ev.target.value)}
-                      className="sans" style={{ width: "100%", marginTop: 4, padding: "8px 12px", outline: "none", fontSize: 13, color: C.ink, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }} />
-                  </div>
-                  <div>
-                    <label className="sans" style={{ fontSize: 12, color: C.inkSoft }}>記録する人</label>
-                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                      {members.map((m) => (
-                        <button key={m.id} onClick={() => setMemberId(m.id)} style={{ background: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                          <div style={{ opacity: memberId === m.id ? 1 : 0.4 }}><Stamp member={m} /></div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <button onClick={addEntry} disabled={!amount || Number(amount) <= 0 || !tag} className="sans" style={{
-                    width: "100%", padding: "12px", marginTop: 8, background: C.stamp, color: "#fff",
-                    borderRadius: 8, fontWeight: 700, fontSize: 14, opacity: (!amount || Number(amount) <= 0 || !tag) ? 0.5 : 1,
-                  }}>記録する</button>
-                </React.Fragment>
-              )}
             </div>
-          )}
+          </div>
+        )}
 
-          {view === "tags" && (
-            <div>
-              <h2 className="serif" style={{ color: C.ink, fontSize: 16, marginBottom: 4 }}>タグ</h2>
-              <p className="sans" style={{ color: C.inkSoft, fontSize: 12, marginBottom: 16 }}>食費、日用品のように、家計簿で使うタグを自由に作成できます。</p>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20 }}>
-                {tags.map((t) => (
-                  <div key={t} className="sans" style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 12px", borderRadius: 999, border: `1px solid ${C.line}`, background: "#fff", color: C.ink, fontSize: 12 }}>
-                    {t}
-                    <button onClick={() => removeTag(t)} style={{ background: "none", display: "flex" }} aria-label={`${t}を削除`}><XIcon size={12} /></button>
+        {view === "add" && (
+          <div style={{ ...page, padding: "12px 16px" }}>
+            {(members.length === 0 || tags.length === 0) ? (
+              <p className="sans" style={{ color: C.inkSoft, fontSize: 13 }}>
+                {members.length === 0 && "先に「メンバー」タブから記録する人を追加してください。"}
+                {members.length === 0 && tags.length === 0 && <br />}
+                {tags.length === 0 && "先に「タグ」タブからタグを追加してください。"}
+              </p>
+            ) : (
+              <React.Fragment>
+                <div style={{ flexShrink: 0, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 10, padding: 8 }}>
+                  <div className="sans" style={{ fontSize: 10, color: C.inkSoft, textAlign: "right", minHeight: 12, overflow: "hidden", whiteSpace: "nowrap" }}>{exprPreview}</div>
+                  <div className="num" style={{ fontSize: 26, fontWeight: 700, color: C.ink, textAlign: "right" }}>{fmtYen(liveTotal)}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 5, marginTop: 6 }}>
+                    {["7","8","9"].map((d) => <CalcBtn key={d} onClick={() => pressDigit(d)}>{d}</CalcBtn>)}
+                    <CalcBtn onClick={pressBackspace} style={{ background: C.paperDeep }}><BackspaceIcon size={14} /></CalcBtn>
+                    {["4","5","6"].map((d) => <CalcBtn key={d} onClick={() => pressDigit(d)}>{d}</CalcBtn>)}
+                    <CalcBtn onClick={resetCalc} style={{ background: C.paperDeep, color: C.stamp }}>C</CalcBtn>
+                    {["1","2","3"].map((d) => <CalcBtn key={d} onClick={() => pressDigit(d)}>{d}</CalcBtn>)}
+                    <CalcBtn onClick={() => pressOp("+")} style={{ background: C.ink, color: "#fff" }}>+</CalcBtn>
+                    <CalcBtn onClick={() => pressDigit("0")}>0</CalcBtn>
+                    <CalcBtn onClick={() => pressDigit("00")}>00</CalcBtn>
+                    <CalcBtn onClick={pressEquals} style={{ background: C.stamp, color: "#fff" }}>=</CalcBtn>
+                    <CalcBtn onClick={() => pressOp("-")} style={{ background: C.ink, color: "#fff" }}>−</CalcBtn>
                   </div>
-                ))}
-                {tags.length === 0 && <p className="sans" style={{ color: C.inkSoft, fontSize: 12 }}>まだタグがありません。</p>}
-              </div>
-              <div style={{ padding: 12, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }}>
-                <label className="sans" style={{ fontSize: 12, color: C.inkSoft }}>新しいタグ</label>
-                <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-                  <input value={newTag} onChange={(ev) => setNewTag(ev.target.value)} onKeyDown={(ev) => ev.key === "Enter" && addTag()}
-                    placeholder="例)食費" className="sans" style={{ flex: 1, padding: "8px 12px", outline: "none", fontSize: 13, color: C.ink, background: C.paper, border: `1px solid ${C.line}`, borderRadius: 6 }} />
-                  <button onClick={addTag} disabled={!newTag.trim() || tags.includes(newTag.trim())} className="sans" style={{ padding: "0 16px", background: C.ink, color: C.paper, borderRadius: 6, fontSize: 13, fontWeight: 500, opacity: (!newTag.trim() || tags.includes(newTag.trim())) ? 0.5 : 1 }}>追加</button>
                 </div>
-              </div>
-            </div>
-          )}
 
-          {view === "members" && (
-            <div>
-              <h2 className="serif" style={{ color: C.ink, fontSize: 16, marginBottom: 12 }}>メンバー</h2>
-              <p className="sans" style={{ color: C.inkSoft, fontSize: 12, marginBottom: 16 }}>メールアドレスは表示用の記録です。相手にはこのページのURLを共有して、同じ画面を開いてもらってください。</p>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
-                {members.map((m) => (
-                  <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 12px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }}>
-                    <Stamp member={m} />
-                    <div style={{ flex: 1 }}>
-                      <div className="sans" style={{ fontSize: 13, color: C.ink, fontWeight: 500 }}>{m.name}</div>
-                      <div className="sans" style={{ fontSize: 11, color: C.inkSoft }}>{m.email}</div>
-                    </div>
-                    <button onClick={() => removeMember(m.id)} style={{ background: "none", display: "flex" }} aria-label="削除"><XIcon /></button>
+                <div style={{ flexShrink: 0, display: "flex", flexWrap: "nowrap", gap: 6, marginTop: 8, overflowX: "auto", paddingBottom: 2 }}>
+                  {tags.map((t) => (
+                    <button key={t} onClick={() => setTag(t)} className="sans" style={{
+                      flexShrink: 0, borderRadius: 999, padding: "5px 12px", fontSize: 11,
+                      border: `1px solid ${tag === t ? C.ink : C.line}`,
+                      background: tag === t ? C.ink : "#fff", color: tag === t ? C.paper : C.inkSoft,
+                    }}>{t}</button>
+                  ))}
+                </div>
+
+                <input value={memo} onChange={(ev) => setMemo(ev.target.value)} placeholder="メモ(任意)"
+                  className="sans" style={{ flexShrink: 0, width: "100%", marginTop: 8, padding: "7px 10px", outline: "none", fontSize: 12, color: C.ink, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }} />
+
+                <div style={{ flexShrink: 0, display: "flex", gap: 6, marginTop: 8, alignItems: "center" }}>
+                  <input type="date" value={date} onChange={(ev) => setDate(ev.target.value)}
+                    className="sans" style={{ flex: 1, padding: "7px 8px", outline: "none", fontSize: 12, color: C.ink, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }} />
+                  <button onClick={() => setIsRecurring((v) => !v)} className="sans" style={{
+                    display: "flex", alignItems: "center", gap: 4, padding: "7px 10px", borderRadius: 8, fontSize: 11,
+                    border: `1px solid ${isRecurring ? C.moss : C.line}`, background: isRecurring ? C.moss : "#fff", color: isRecurring ? "#fff" : C.inkSoft,
+                  }}><RepeatIcon size={12} color={isRecurring ? "#fff" : C.inkSoft} />繰り返す</button>
+                </div>
+                {isRecurring && (
+                  <div style={{ flexShrink: 0, display: "flex", gap: 6, marginTop: 6 }}>
+                    {[["monthly", "毎月"], ["yearly", "毎年"]].map(([k, l]) => (
+                      <button key={k} onClick={() => setFreq(k)} className="sans" style={{
+                        flex: 1, padding: "6px 0", borderRadius: 8, fontSize: 11,
+                        border: `1px solid ${freq === k ? C.ink : C.line}`, background: freq === k ? C.ink : "#fff", color: freq === k ? C.paper : C.inkSoft,
+                      }}>{l}</button>
+                    ))}
                   </div>
-                ))}
-                {members.length === 0 && <p className="sans" style={{ color: C.inkSoft, fontSize: 12 }}>まだメンバーがいません。</p>}
-              </div>
-              <div style={{ padding: 12, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }}>
-                <label className="sans" style={{ fontSize: 12, color: C.inkSoft }}>名前</label>
-                <input value={newName} onChange={(ev) => setNewName(ev.target.value)} placeholder="例)たろう"
-                  className="sans" style={{ width: "100%", marginTop: 4, marginBottom: 12, padding: "8px 12px", outline: "none", fontSize: 13, color: C.ink, background: C.paper, border: `1px solid ${C.line}`, borderRadius: 6 }} />
-                <label className="sans" style={{ fontSize: 12, color: C.inkSoft }}>メールアドレス</label>
-                <input value={newEmail} onChange={(ev) => setNewEmail(ev.target.value)} placeholder="taro@example.com"
-                  className="sans" style={{ width: "100%", marginTop: 4, marginBottom: 12, padding: "8px 12px", outline: "none", fontSize: 13, color: C.ink, background: C.paper, border: `1px solid ${C.line}`, borderRadius: 6 }} />
-                <button onClick={addMember} disabled={!newName.trim() || !newEmail.trim()} className="sans" style={{
-                  width: "100%", padding: "8px", background: C.ink, color: C.paper, borderRadius: 6, fontSize: 13, fontWeight: 500,
-                  opacity: (!newName.trim() || !newEmail.trim()) ? 0.5 : 1,
-                }}>メンバーを追加</button>
+                )}
+
+                <div style={{ flexShrink: 0, display: "flex", gap: 8, marginTop: 8 }}>
+                  {members.map((m) => (
+                    <button key={m.id} onClick={() => setMemberId(m.id)} style={{ background: "none", display: "flex", flexDirection: "column", alignItems: "center" }}>
+                      <div style={{ opacity: memberId === m.id ? 1 : 0.4 }}><Stamp member={m} size={28} /></div>
+                    </button>
+                  ))}
+                </div>
+
+                <div style={{ flex: 1 }} />
+                <button onClick={addEntry} disabled={!liveTotal || liveTotal <= 0 || !tag} className="sans" style={{
+                  flexShrink: 0, width: "100%", padding: "11px", background: C.stamp, color: "#fff",
+                  borderRadius: 8, fontWeight: 700, fontSize: 14, opacity: (!liveTotal || liveTotal <= 0 || !tag) ? 0.5 : 1,
+                }}>記録する</button>
+              </React.Fragment>
+            )}
+          </div>
+        )}
+
+        {view === "tags" && (
+          <div style={{ ...page, padding: "14px 16px" }}>
+            <h2 className="serif" style={{ color: C.ink, fontSize: 15, margin: "0 0 8px" }}>タグ</h2>
+            <div style={{ ...scrollArea, display: "flex", flexWrap: "wrap", gap: 6, alignContent: "flex-start" }}>
+              {tags.map((t) => (
+                <div key={t} className="sans" style={{ display: "flex", alignItems: "center", gap: 4, padding: "5px 10px", borderRadius: 999, border: `1px solid ${C.line}`, background: "#fff", color: C.ink, fontSize: 12, height: "fit-content" }}>
+                  {t}
+                  <button onClick={() => removeTag(t)} style={{ background: "none", display: "flex" }} aria-label={`${t}を削除`}><XIcon size={11} /></button>
+                </div>
+              ))}
+              {tags.length === 0 && <p className="sans" style={{ color: C.inkSoft, fontSize: 12 }}>まだタグがありません。</p>}
+            </div>
+            <div style={{ flexShrink: 0, padding: 10, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8, marginTop: 8 }}>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input value={newTag} onChange={(ev) => setNewTag(ev.target.value)} onKeyDown={(ev) => ev.key === "Enter" && addTag()}
+                  placeholder="例)食費" className="sans" style={{ flex: 1, padding: "7px 10px", outline: "none", fontSize: 12, color: C.ink, background: C.paper, border: `1px solid ${C.line}`, borderRadius: 6 }} />
+                <button onClick={addTag} disabled={!newTag.trim() || tags.includes(newTag.trim())} className="sans" style={{ padding: "0 16px", background: C.ink, color: C.paper, borderRadius: 6, fontSize: 12, fontWeight: 500, opacity: (!newTag.trim() || tags.includes(newTag.trim())) ? 0.5 : 1 }}>追加</button>
               </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
-        <div style={{ display: "flex", borderTop: `1px solid ${C.line}`, background: "#fff" }}>
+        {view === "members" && (
+          <div style={{ ...page, padding: "14px 16px" }}>
+            <h2 className="serif" style={{ color: C.ink, fontSize: 15, margin: "0 0 8px" }}>メンバー</h2>
+            <div style={{ ...scrollArea, display: "flex", flexDirection: "column", gap: 6 }}>
+              {members.map((m) => (
+                <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 10px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }}>
+                  <Stamp member={m} size={28} />
+                  <div className="sans" style={{ flex: 1, fontSize: 13, color: C.ink, fontWeight: 500 }}>{m.name}</div>
+                  <button onClick={() => removeMember(m.id)} style={{ background: "none", display: "flex" }} aria-label="削除"><XIcon size={14} /></button>
+                </div>
+              ))}
+              {members.length === 0 && <p className="sans" style={{ color: C.inkSoft, fontSize: 12 }}>まだメンバーがいません。</p>}
+            </div>
+            <div style={{ flexShrink: 0, padding: 10, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8, marginTop: 8 }}>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input value={newName} onChange={(ev) => setNewName(ev.target.value)} onKeyDown={(ev) => ev.key === "Enter" && addMember()} placeholder="名前(例:たろう)"
+                  className="sans" style={{ flex: 1, padding: "7px 10px", outline: "none", fontSize: 12, color: C.ink, background: C.paper, border: `1px solid ${C.line}`, borderRadius: 6 }} />
+                <button onClick={addMember} disabled={!newName.trim()} className="sans" style={{
+                  padding: "0 16px", background: C.ink, color: C.paper, borderRadius: 6, fontSize: 12, fontWeight: 500,
+                  opacity: !newName.trim() ? 0.5 : 1,
+                }}>追加</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div style={{ flexShrink: 0, display: "flex", borderTop: `1px solid ${C.line}`, background: "#fff" }}>
           {[
-            { key: "home", label: "帳簿", Icon: BookIcon },
             { key: "add", label: "記録", Icon: PlusIcon },
+            { key: "home", label: "帳簿", Icon: BookIcon },
             { key: "tags", label: "タグ", Icon: TagIcon },
             { key: "members", label: "メンバー", Icon: UsersIcon },
           ].map(({ key, label, Icon: I }) => (
-            <button key={key} onClick={() => setView(key)} style={{ flex: 1, background: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "12px 0" }}>
-              <I color={view === key ? C.stamp : C.inkSoft} />
-              <span className="sans" style={{ fontSize: 10, color: view === key ? C.stamp : C.inkSoft }}>{label}</span>
+            <button key={key} onClick={() => setView(key)} style={{ flex: 1, background: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "8px 0" }}>
+              <I color={view === key ? C.stamp : C.inkSoft} size={17} />
+              <span className="sans" style={{ fontSize: 9, color: view === key ? C.stamp : C.inkSoft }}>{label}</span>
             </button>
           ))}
         </div>
       </div>
     </div>
+  );
+}
+
+function CalcBtn({ children, onClick, style }) {
+  return (
+    <button onClick={onClick} className="num" style={{
+      height: 38, borderRadius: 8, background: "#F1EAD9", color: "#1E2A44", fontSize: 15, fontWeight: 700,
+      display: "flex", alignItems: "center", justifyContent: "center", ...style,
+    }}>{children}</button>
   );
 }
 
