@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<title>家計帳</title>
+
+<script>
+  window.FIREBASE_CONFIG = {
+    apiKey: "AIzaSyB2An6faEPOUFrhrnHtUz9KXWZiWvltBho",
+    authDomain: "kakeibo-55474.firebaseapp.com",
+    projectId: "kakeibo-55474",
+    storageBucket: "kakeibo-55474.firebasestorage.app",
+    messagingSenderId: "710430296758",
+    appId: "1:710430296758:web:6252f3820c4b64ac0f3417",
+  };
+</script>
+
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@500;700&family=Noto+Sans+JP:wght@400;500;700&family=JetBrains+Mono:wght@500;700&display=swap');
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  .serif { font-family: 'Shippori Mincho', serif; }
+  .sans { font-family: 'Noto Sans JP', sans-serif; }
+  .num { font-family: 'JetBrains Mono', monospace; }
+  input, button { font-family: inherit; }
+  button { cursor: pointer; border: none; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo } = React;
+
+const C = {
+  paper: "#FAF6EC", paperDeep: "#F1EAD9", line: "#DDD3B8",
+  ink: "#1E2A44", inkSoft: "#5B6480", stamp: "#B23A2E", moss: "#4B7A5B",
+};
+const STAMP_COLORS = ["#B23A2E", "#2E5E8C", "#4B7A5B", "#8C6A2E", "#6A4B8C", "#2E8C82"];
+
+const fmtYen = (n) => `¥${Number(n || 0).toLocaleString("ja-JP")}`;
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const monthKeyOf = (iso) => iso.slice(0, 7);
+const fmtDateJp = (iso) => {
+  const d = new Date(iso + "T00:00:00");
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+};
+
+const Icon = ({ children, size = 18, color = C.inkSoft }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    {children}
+  </svg>
+);
+const BookIcon = (p) => <Icon {...p}><path d="M4 4h11a3 3 0 0 1 3 3v13H7a3 3 0 0 1-3-3V4z"/><path d="M18 4v16"/></Icon>;
+const PlusIcon = (p) => <Icon {...p}><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></Icon>;
+const TagIcon = (p) => <Icon {...p}><path d="M4 11V4h7l9 9-7 7-9-9z"/><circle cx="8" cy="8" r="1"/></Icon>;
+const UsersIcon = (p) => <Icon {...p}><circle cx="8" cy="8" r="3"/><circle cx="16" cy="9" r="3"/><path d="M2 20c0-3.3 2.7-6 6-6s6 2.7 6 6M13 14c3 0 6 2.5 6 6"/></Icon>;
+const XIcon = (p) => <Icon {...p}><path d="M6 6l12 12M18 6L6 18"/></Icon>;
+const TrashIcon = (p) => <Icon {...p}><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></Icon>;
+
+function Stamp({ member, size = 34 }) {
+  if (!member) return null;
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: "9999px", background: "#fff",
+      border: `2px solid ${member.color}`, color: member.color, display: "flex",
+      alignItems: "center", justifyContent: "center", fontFamily: "'Shippori Mincho', serif",
+      fontWeight: 700, fontSize: size * 0.42, transform: "rotate(-6deg)",
+      boxShadow: `inset 0 0 0 1px ${member.color}33`, flexShrink: 0,
+    }} title={member.name}>{member.name.slice(0, 1)}</div>
+  );
+}
+
+function App() {
+  const [db, setDb] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [members, setMembers] = useState([]);
+  const [entries, setEntries] = useState([]);
+  const [tags, setTags] = useState([]);
+  const [view, setView] = useState("home");
+  const [error, setError] = useState("");
+
+  const [newName, setNewName] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newTag, setNewTag] = useState("");
+  const [amount, setAmount] = useState("");
+  const [tag, setTag] = useState("");
+  const [memo, setMemo] = useState("");
+  const [date, setDate] = useState(todayISO());
+  const [memberId, setMemberId] = useState(null);
+
+  useEffect(() => {
+    try {
+      const app = firebase.initializeApp(window.FIREBASE_CONFIG);
+      setDb(firebase.firestore());
+    } catch (err) {
+      setError("Firebaseへの接続に失敗しました。設定を確認してください。");
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!db) return;
+    let loadedCount = 0;
+    const markLoaded = () => { loadedCount++; if (loadedCount >= 3) setLoading(false); };
+
+    const unsubM = db.collection("members").onSnapshot((snap) => {
+      setMembers(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      markLoaded();
+    }, () => { setError("メンバーの取得に失敗しました。"); markLoaded(); });
+
+    const unsubT = db.collection("tags").onSnapshot((snap) => {
+      setTags(snap.docs.map((d) => d.data().name));
+      markLoaded();
+    }, () => { setError("タグの取得に失敗しました。"); markLoaded(); });
+
+    const unsubE = db.collection("entries").onSnapshot((snap) => {
+      setEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      markLoaded();
+    }, () => { setError("記録の取得に失敗しました。"); markLoaded(); });
+
+    return () => { unsubM(); unsubT(); unsubE(); };
+  }, [db]);
+
+  useEffect(() => {
+    if (members.length && !memberId) setMemberId(members[0].id);
+  }, [members]);
+  useEffect(() => {
+    if (tags.length && !tag) setTag(tags[0]);
+  }, [tags]);
+
+  const addMember = async () => {
+    if (!newName.trim() || !newEmail.trim() || !db) return;
+    const color = STAMP_COLORS[members.length % STAMP_COLORS.length];
+    try {
+      await db.collection("members").add({ name: newName.trim(), email: newEmail.trim(), color });
+      setNewName(""); setNewEmail("");
+    } catch { setError("メンバーの追加に失敗しました。"); }
+  };
+  const removeMember = async (id) => {
+    try { await db.collection("members").doc(id).delete(); }
+    catch { setError("削除に失敗しました。"); }
+  };
+  const addTag = async () => {
+    const t = newTag.trim();
+    if (!t || tags.includes(t) || !db) return;
+    try { await db.collection("tags").add({ name: t }); setNewTag(""); }
+    catch { setError("タグの追加に失敗しました。"); }
+  };
+  const removeTag = async (t) => {
+    try {
+      const snap = await db.collection("tags").where("name", "==", t).get();
+      await Promise.all(snap.docs.map((d) => d.ref.delete()));
+    } catch { setError("削除に失敗しました。"); }
+  };
+  const addEntry = async () => {
+    const val = Number(amount);
+    if (!val || val <= 0 || !memberId || !tag || !db) return;
+    try {
+      await db.collection("entries").add({
+        amount: val, tag, memo: memo.trim(), date, memberId,
+      });
+      setAmount(""); setMemo(""); setView("home");
+    } catch { setError("記録の保存に失敗しました。"); }
+  };
+  const removeEntry = async (id) => {
+    try { await db.collection("entries").doc(id).delete(); }
+    catch { setError("削除に失敗しました。"); }
+  };
+
+  const thisMonth = monthKeyOf(todayISO());
+  const monthEntries = useMemo(() => entries.filter((e) => monthKeyOf(e.date) === thisMonth), [entries, thisMonth]);
+  const monthTotal = useMemo(() => monthEntries.reduce((s, e) => s + Number(e.amount), 0), [monthEntries]);
+
+  const byTag = useMemo(() => {
+    const map = {};
+    monthEntries.forEach((e) => { map[e.tag] = (map[e.tag] || 0) + Number(e.amount); });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [monthEntries]);
+  const maxTag = byTag.length ? byTag[0][1] : 1;
+
+  const byMember = useMemo(() => {
+    const map = {};
+    monthEntries.forEach((e) => { map[e.memberId] = (map[e.memberId] || 0) + Number(e.amount); });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [monthEntries]);
+  const maxMember = byMember.length ? byMember[0][1] : 1;
+
+  const grouped = useMemo(() => {
+    const map = {};
+    entries.forEach((e) => { map[e.date] = map[e.date] || []; map[e.date].push(e); });
+    return Object.entries(map).sort((a, b) => (a[0] < b[0] ? 1 : -1));
+  }, [entries]);
+
+  const memberOf = (id) => members.find((m) => m.id === id);
+
+  if (loading) {
+    return <div style={{ background: C.paper, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <p className="sans" style={{ color: C.inkSoft }}>読み込み中…</p>
+    </div>;
+  }
+
+  return (
+    <div style={{ background: C.paper, minHeight: "100vh" }}>
+      <div style={{ maxWidth: 448, margin: "0 auto", minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ background: C.ink, borderBottom: `4px double ${C.stamp}55`, padding: "32px 24px 24px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <h1 className="serif" style={{ color: C.paper, fontSize: 22, letterSpacing: 1, margin: 0 }}>家計帳</h1>
+            <span className="sans" style={{ color: "#ffffff88", fontSize: 12 }}>{thisMonth.replace("-", "年")}月</span>
+          </div>
+          <p className="sans" style={{ color: "#ffffffaa", fontSize: 12, marginTop: 2 }}>みんなで記録する共有家計簿</p>
+          <div style={{ marginTop: 16 }}>
+            <span className="sans" style={{ color: "#ffffff99", fontSize: 12 }}>今月の合計</span>
+            <div className="num" style={{ color: C.paper, fontSize: 34, fontWeight: 700, lineHeight: 1.2 }}>{fmtYen(monthTotal)}</div>
+          </div>
+        </div>
+
+        {error && (
+          <div className="sans" style={{ margin: "12px 24px 0", padding: "8px 12px", background: "#fff", border: `1px solid ${C.stamp}`, color: C.stamp, borderRadius: 6, fontSize: 13 }}>{error}</div>
+        )}
+
+        <div style={{ flex: 1, padding: "20px 24px", overflowY: "auto" }}>
+          {view === "home" && (
+            <React.Fragment>
+              {byTag.length > 0 && (
+                <div style={{ marginBottom: 24 }}>
+                  <h2 className="serif" style={{ color: C.ink, fontSize: 15, marginBottom: 10 }}>タグ別内訳</h2>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {byTag.map(([t, sum]) => (
+                      <div key={t} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                        <span className="sans" style={{ width: 72, fontSize: 12, color: C.inkSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t}</span>
+                        <div style={{ flex: 1, height: 8, borderRadius: 999, background: C.paperDeep }}>
+                          <div style={{ width: `${(sum / maxTag) * 100}%`, height: 8, borderRadius: 999, background: C.stamp, opacity: 0.75 }} />
+                        </div>
+                        <span className="num" style={{ fontSize: 12, color: C.ink, width: 64, textAlign: "right" }}>{fmtYen(sum)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {byMember.length > 0 && (
+                <div style={{ marginBottom: 24 }}>
+                  <h2 className="serif" style={{ color: C.ink, fontSize: 15, marginBottom: 10 }}>人別内訳</h2>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {byMember.map(([mid, sum]) => {
+                      const m = memberOf(mid);
+                      if (!m) return null;
+                      return (
+                        <div key={mid} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                          <Stamp member={m} size={22} />
+                          <span className="sans" style={{ width: 52, fontSize: 12, color: C.inkSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</span>
+                          <div style={{ flex: 1, height: 8, borderRadius: 999, background: C.paperDeep }}>
+                            <div style={{ width: `${(sum / maxMember) * 100}%`, height: 8, borderRadius: 999, background: m.color, opacity: 0.75 }} />
+                          </div>
+                          <span className="num" style={{ fontSize: 12, color: C.ink, width: 64, textAlign: "right" }}>{fmtYen(sum)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <h2 className="serif" style={{ color: C.ink, fontSize: 15, marginBottom: 6 }}>履歴</h2>
+              {entries.length === 0 ? (
+                <div className="sans" style={{ textAlign: "center", padding: "40px 0", color: C.inkSoft, fontSize: 13, border: `1px dashed ${C.line}`, borderRadius: 10 }}>
+                  まだ記録がありません。右下から最初の支出を記録しましょう。
+                </div>
+              ) : grouped.map(([d, list]) => (
+                <div key={d} style={{ marginBottom: 16 }}>
+                  <div className="sans" style={{ color: C.inkSoft, fontSize: 11, marginBottom: 4 }}>{fmtDateJp(d)}</div>
+                  <div style={{ background: "#fff", borderRadius: 10, border: `1px solid ${C.line}` }}>
+                    {list.map((e, i) => (
+                      <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px", borderBottom: i < list.length - 1 ? `1px solid ${C.line}` : "none" }}>
+                        <Stamp member={memberOf(e.memberId)} size={30} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div className="sans" style={{ color: C.ink, fontSize: 13, fontWeight: 500 }}>{e.tag}</div>
+                          {e.memo && <div className="sans" style={{ color: C.inkSoft, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.memo}</div>}
+                        </div>
+                        <div className="num" style={{ color: C.ink, fontSize: 14, fontWeight: 700 }}>{fmtYen(e.amount)}</div>
+                        <button onClick={() => removeEntry(e.id)} style={{ background: "none" }} aria-label="削除"><TrashIcon /></button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </React.Fragment>
+          )}
+
+          {view === "add" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+              <h2 className="serif" style={{ color: C.ink, fontSize: 16, margin: 0 }}>支出を記録</h2>
+              {(members.length === 0 || tags.length === 0) ? (
+                <p className="sans" style={{ color: C.inkSoft, fontSize: 13 }}>
+                  {members.length === 0 && "先に「メンバー」タブから記録する人を追加してください。"}
+                  {members.length === 0 && tags.length === 0 && <br />}
+                  {tags.length === 0 && "先に「タグ」タブからタグを追加してください。"}
+                </p>
+              ) : (
+                <React.Fragment>
+                  <div>
+                    <label className="sans" style={{ fontSize: 12, color: C.inkSoft }}>金額</label>
+                    <div style={{ display: "flex", alignItems: "center", marginTop: 4, padding: "8px 12px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }}>
+                      <span className="num" style={{ color: C.inkSoft, marginRight: 4 }}>¥</span>
+                      <input type="number" inputMode="numeric" value={amount} onChange={(ev) => setAmount(ev.target.value)}
+                        placeholder="0" className="num" style={{ flex: 1, border: "none", outline: "none", fontSize: 20, color: C.ink, background: "transparent" }} />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="sans" style={{ fontSize: 12, color: C.inkSoft }}>タグ</label>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+                      {tags.map((t) => (
+                        <button key={t} onClick={() => setTag(t)} className="sans" style={{
+                          borderRadius: 999, padding: "6px 12px", fontSize: 12,
+                          border: `1px solid ${tag === t ? C.ink : C.line}`,
+                          background: tag === t ? C.ink : "#fff", color: tag === t ? C.paper : C.inkSoft,
+                        }}>{t}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="sans" style={{ fontSize: 12, color: C.inkSoft }}>メモ(任意)</label>
+                    <input value={memo} onChange={(ev) => setMemo(ev.target.value)} placeholder="例)スーパーで食材"
+                      className="sans" style={{ width: "100%", marginTop: 4, padding: "8px 12px", outline: "none", fontSize: 13, color: C.ink, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }} />
+                  </div>
+                  <div>
+                    <label className="sans" style={{ fontSize: 12, color: C.inkSoft }}>日付</label>
+                    <input type="date" value={date} onChange={(ev) => setDate(ev.target.value)}
+                      className="sans" style={{ width: "100%", marginTop: 4, padding: "8px 12px", outline: "none", fontSize: 13, color: C.ink, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }} />
+                  </div>
+                  <div>
+                    <label className="sans" style={{ fontSize: 12, color: C.inkSoft }}>記録する人</label>
+                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                      {members.map((m) => (
+                        <button key={m.id} onClick={() => setMemberId(m.id)} style={{ background: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                          <div style={{ opacity: memberId === m.id ? 1 : 0.4 }}><Stamp member={m} /></div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <button onClick={addEntry} disabled={!amount || Number(amount) <= 0 || !tag} className="sans" style={{
+                    width: "100%", padding: "12px", marginTop: 8, background: C.stamp, color: "#fff",
+                    borderRadius: 8, fontWeight: 700, fontSize: 14, opacity: (!amount || Number(amount) <= 0 || !tag) ? 0.5 : 1,
+                  }}>記録する</button>
+                </React.Fragment>
+              )}
+            </div>
+          )}
+
+          {view === "tags" && (
+            <div>
+              <h2 className="serif" style={{ color: C.ink, fontSize: 16, marginBottom: 4 }}>タグ</h2>
+              <p className="sans" style={{ color: C.inkSoft, fontSize: 12, marginBottom: 16 }}>食費、日用品のように、家計簿で使うタグを自由に作成できます。</p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20 }}>
+                {tags.map((t) => (
+                  <div key={t} className="sans" style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 12px", borderRadius: 999, border: `1px solid ${C.line}`, background: "#fff", color: C.ink, fontSize: 12 }}>
+                    {t}
+                    <button onClick={() => removeTag(t)} style={{ background: "none", display: "flex" }} aria-label={`${t}を削除`}><XIcon size={12} /></button>
+                  </div>
+                ))}
+                {tags.length === 0 && <p className="sans" style={{ color: C.inkSoft, fontSize: 12 }}>まだタグがありません。</p>}
+              </div>
+              <div style={{ padding: 12, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }}>
+                <label className="sans" style={{ fontSize: 12, color: C.inkSoft }}>新しいタグ</label>
+                <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                  <input value={newTag} onChange={(ev) => setNewTag(ev.target.value)} onKeyDown={(ev) => ev.key === "Enter" && addTag()}
+                    placeholder="例)食費" className="sans" style={{ flex: 1, padding: "8px 12px", outline: "none", fontSize: 13, color: C.ink, background: C.paper, border: `1px solid ${C.line}`, borderRadius: 6 }} />
+                  <button onClick={addTag} disabled={!newTag.trim() || tags.includes(newTag.trim())} className="sans" style={{ padding: "0 16px", background: C.ink, color: C.paper, borderRadius: 6, fontSize: 13, fontWeight: 500, opacity: (!newTag.trim() || tags.includes(newTag.trim())) ? 0.5 : 1 }}>追加</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {view === "members" && (
+            <div>
+              <h2 className="serif" style={{ color: C.ink, fontSize: 16, marginBottom: 12 }}>メンバー</h2>
+              <p className="sans" style={{ color: C.inkSoft, fontSize: 12, marginBottom: 16 }}>メールアドレスは表示用の記録です。相手にはこのページのURLを共有して、同じ画面を開いてもらってください。</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+                {members.map((m) => (
+                  <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 12px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }}>
+                    <Stamp member={m} />
+                    <div style={{ flex: 1 }}>
+                      <div className="sans" style={{ fontSize: 13, color: C.ink, fontWeight: 500 }}>{m.name}</div>
+                      <div className="sans" style={{ fontSize: 11, color: C.inkSoft }}>{m.email}</div>
+                    </div>
+                    <button onClick={() => removeMember(m.id)} style={{ background: "none", display: "flex" }} aria-label="削除"><XIcon /></button>
+                  </div>
+                ))}
+                {members.length === 0 && <p className="sans" style={{ color: C.inkSoft, fontSize: 12 }}>まだメンバーがいません。</p>}
+              </div>
+              <div style={{ padding: 12, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }}>
+                <label className="sans" style={{ fontSize: 12, color: C.inkSoft }}>名前</label>
+                <input value={newName} onChange={(ev) => setNewName(ev.target.value)} placeholder="例)たろう"
+                  className="sans" style={{ width: "100%", marginTop: 4, marginBottom: 12, padding: "8px 12px", outline: "none", fontSize: 13, color: C.ink, background: C.paper, border: `1px solid ${C.line}`, borderRadius: 6 }} />
+                <label className="sans" style={{ fontSize: 12, color: C.inkSoft }}>メールアドレス</label>
+                <input value={newEmail} onChange={(ev) => setNewEmail(ev.target.value)} placeholder="taro@example.com"
+                  className="sans" style={{ width: "100%", marginTop: 4, marginBottom: 12, padding: "8px 12px", outline: "none", fontSize: 13, color: C.ink, background: C.paper, border: `1px solid ${C.line}`, borderRadius: 6 }} />
+                <button onClick={addMember} disabled={!newName.trim() || !newEmail.trim()} className="sans" style={{
+                  width: "100%", padding: "8px", background: C.ink, color: C.paper, borderRadius: 6, fontSize: 13, fontWeight: 500,
+                  opacity: (!newName.trim() || !newEmail.trim()) ? 0.5 : 1,
+                }}>メンバーを追加</button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: "flex", borderTop: `1px solid ${C.line}`, background: "#fff" }}>
+          {[
+            { key: "home", label: "帳簿", Icon: BookIcon },
+            { key: "add", label: "記録", Icon: PlusIcon },
+            { key: "tags", label: "タグ", Icon: TagIcon },
+            { key: "members", label: "メンバー", Icon: UsersIcon },
+          ].map(({ key, label, Icon: I }) => (
+            <button key={key} onClick={() => setView(key)} style={{ flex: 1, background: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "12px 0" }}>
+              <I color={view === key ? C.stamp : C.inkSoft} />
+              <span className="sans" style={{ fontSize: 10, color: view === key ? C.stamp : C.inkSoft }}>{label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
