@@ -222,12 +222,10 @@ function App() {
   const moveTag = async (index, dir) => {
     const target = index + dir;
     if (target < 0 || target >= tags.length || !db) return;
-    const a = tags[index], b = tags[target];
+    const next = [...tags];
+    [next[index], next[target]] = [next[target], next[index]];
     try {
-      await Promise.all([
-        db.collection("tags").doc(a.id).update({ order: b.order }),
-        db.collection("tags").doc(b.id).update({ order: a.order }),
-      ]);
+      await Promise.all(next.map((t, i) => db.collection("tags").doc(t.id).update({ order: i })));
     } catch { setError("並び替えに失敗しました。"); }
   };
 
