@@ -71,8 +71,8 @@ const shiftMonth = (mk, delta) => {
 };
 const daysInMonth = (y, m) => new Date(y, m, 0).getDate();
 
-const Icon = ({ children, size = 16, color = C.inkSoft }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+const Icon = ({ children, size = 16, color = C.inkSoft, style }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
     {children}
   </svg>
 );
@@ -87,6 +87,7 @@ const ChevRight = (p) => <Icon {...p}><path d="M9 6l6 6-6 6"/></Icon>;
 const RepeatIcon = (p) => <Icon {...p}><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></Icon>;
 const BackspaceIcon = (p) => <Icon {...p}><path d="M21 4H8l-6 8 6 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/><path d="M14 10l-4 4M10 10l4 4"/></Icon>;
 const CheckIcon = (p) => <Icon {...p}><path d="M20 6L9 17l-5-5"/></Icon>;
+const PencilIcon = (p) => <Icon {...p}><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></Icon>;
 
 function Stamp({ member, size = 32 }) {
   if (!member) return null;
@@ -137,6 +138,8 @@ function App() {
   const [memberId, setMemberId] = useState(null);
   const [isRecurring, setIsRecurring] = useState(false);
   const [freq, setFreq] = useState("monthly");
+  const [editingMemoId, setEditingMemoId] = useState(null);
+  const [editingMemoValue, setEditingMemoValue] = useState("");
 
   useEffect(() => {
     try {
@@ -161,7 +164,9 @@ function App() {
       setMembers(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); markLoaded();
     }, () => { setError("メンバーの取得に失敗しました。"); markLoaded(); });
     const unsubT = db.collection("tags").onSnapshot((snap) => {
-      setTags(snap.docs.map((d) => d.data().name)); markLoaded();
+      const list = snap.docs.map((d) => ({ id: d.id, name: d.data().name, order: d.data().order ?? 0 }));
+      list.sort((a, b) => a.order - b.order);
+      setTags(list); markLoaded();
     }, () => { setError("タグの取得に失敗しました。"); markLoaded(); });
     const unsubE = db.collection("entries").onSnapshot((snap) => {
       setEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); markLoaded();
@@ -179,7 +184,7 @@ function App() {
   }, [db]);
 
   useEffect(() => { if (members.length && !memberId) setMemberId(members[0].id); }, [members]);
-  useEffect(() => { if (tags.length && !tag) setTag(tags[0]); }, [tags]);
+  useEffect(() => { if (tags.length && !tag) setTag(tags[0].name); }, [tags]);
   useEffect(() => { setConfirmPaid(false); }, [viewMonth]);
   useEffect(() => {
     if (!confirmPaid) return;
@@ -206,15 +211,24 @@ function App() {
   };
   const addTag = async () => {
     const t = newTag.trim();
-    if (!t || tags.includes(t) || !db) return;
-    try { await db.collection("tags").add({ name: t }); setNewTag(""); }
+    if (!t || tags.some((x) => x.name === t) || !db) return;
+    try { await db.collection("tags").add({ name: t, order: tags.length }); setNewTag(""); }
     catch { setError("タグの追加に失敗しました。"); }
   };
-  const removeTag = async (t) => {
+  const removeTag = async (id) => {
+    try { await db.collection("tags").doc(id).delete(); }
+    catch { setError("削除に失敗しました。"); }
+  };
+  const moveTag = async (index, dir) => {
+    const target = index + dir;
+    if (target < 0 || target >= tags.length || !db) return;
+    const a = tags[index], b = tags[target];
     try {
-      const snap = await db.collection("tags").where("name", "==", t).get();
-      await Promise.all(snap.docs.map((d) => d.ref.delete()));
-    } catch { setError("削除に失敗しました。"); }
+      await Promise.all([
+        db.collection("tags").doc(a.id).update({ order: b.order }),
+        db.collection("tags").doc(b.id).update({ order: a.order }),
+      ]);
+    } catch { setError("並び替えに失敗しました。"); }
   };
 
   const resetCalc = () => { setCalcTokens([]); setCalcInput("0"); };
@@ -246,8 +260,16 @@ function App() {
       else await db.collection("entries").doc(e.id).delete();
     } catch { setError("削除に失敗しました。"); }
   };
+  const startEditMemo = (e) => { setEditingMemoId(e.id); setEditingMemoValue(e.memo || ""); };
+  const saveMemo = async (e) => {
+    const value = editingMemoValue.trim();
+    setEditingMemoId(null);
+    try {
+      if (e.isRecurring) await db.collection("recurring").doc(e.recurringId).update({ memo: value });
+      else await db.collection("entries").doc(e.id).update({ memo: value });
+    } catch { setError("メモの更新に失敗しました。"); }
+  };
 
-  // 選択中の月について、実際の記録 + 繰り返しの仮想記録 を合成する
   const monthEntries = useMemo(() => {
     const [y, m] = viewMonth.split("-").map(Number);
     const actual = entries.filter((e) => monthKeyOf(e.date) === viewMonth);
@@ -414,9 +436,25 @@ function App() {
                             {e.tag}
                             {e.isRecurring && <RepeatIcon size={11} color={C.moss} />}
                           </div>
-                          {e.memo && <div className="sans" style={{ color: C.inkSoft, fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.memo}</div>}
+                          {editingMemoId === e.id ? (
+                            <input
+                              autoFocus
+                              value={editingMemoValue}
+                              onChange={(ev) => setEditingMemoValue(ev.target.value)}
+                              onBlur={() => saveMemo(e)}
+                              onKeyDown={(ev) => ev.key === "Enter" && saveMemo(e)}
+                              placeholder="メモ"
+                              className="sans"
+                              style={{ width: "100%", fontSize: 10, color: C.ink, background: C.paper, border: `1px solid ${C.line}`, borderRadius: 6, padding: "2px 6px", marginTop: 2, outline: "none" }}
+                            />
+                          ) : (
+                            <div onClick={() => startEditMemo(e)} className="sans" style={{ color: e.memo ? C.inkSoft : "#C9B8AC", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontStyle: e.memo ? "normal" : "italic" }}>
+                              {e.memo || "+ メモを追加"}
+                            </div>
+                          )}
                         </div>
                         <div className="num" style={{ color: C.ink, fontSize: 13, fontWeight: 700 }}>{fmtYen(e.amount)}</div>
+                        <button onClick={() => startEditMemo(e)} style={{ background: "none", display: "flex" }} aria-label="メモを編集"><PencilIcon size={12} /></button>
                         <button onClick={() => removeEntry(e)} style={{ background: "none" }} aria-label="削除"><TrashIcon size={13} /></button>
                       </div>
                     ))}
@@ -456,11 +494,11 @@ function App() {
 
                 <div style={{ flexShrink: 0, display: "flex", flexWrap: "nowrap", gap: 6, marginTop: 8, overflowX: "auto", paddingBottom: 2 }}>
                   {tags.map((t) => (
-                    <button key={t} onClick={() => setTag(t)} className="sans" style={{
+                    <button key={t.id} onClick={() => setTag(t.name)} className="sans" style={{
                       flexShrink: 0, borderRadius: 999, padding: "5px 12px", fontSize: 11,
-                      border: `1px solid ${tag === t ? C.ink : C.line}`,
-                      background: tag === t ? C.ink : "#fff", color: tag === t ? C.paper : C.inkSoft,
-                    }}>{t}</button>
+                      border: `1px solid ${tag === t.name ? C.ink : C.line}`,
+                      background: tag === t.name ? C.ink : "#fff", color: tag === t.name ? C.paper : C.inkSoft,
+                    }}>{t.name}</button>
                   ))}
                 </div>
 
@@ -507,11 +545,17 @@ function App() {
         {view === "tags" && (
           <div style={{ ...page, padding: "14px 16px" }}>
             <h2 className="serif" style={{ color: C.ink, fontSize: 15, margin: "0 0 8px" }}>タグ</h2>
-            <div style={{ ...scrollArea, display: "flex", flexWrap: "wrap", gap: 6, alignContent: "flex-start" }}>
-              {tags.map((t) => (
-                <div key={t} className="sans" style={{ display: "flex", alignItems: "center", gap: 4, padding: "5px 10px", borderRadius: 999, border: `1px solid ${C.line}`, background: "#fff", color: C.ink, fontSize: 12, height: "fit-content" }}>
-                  {t}
-                  <button onClick={() => removeTag(t)} style={{ background: "none", display: "flex" }} aria-label={`${t}を削除`}><XIcon size={11} /></button>
+            <div style={{ ...scrollArea, display: "flex", flexDirection: "column", gap: 6 }}>
+              {tags.map((t, i) => (
+                <div key={t.id} className="sans" style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px 6px 12px", borderRadius: 12, border: `1px solid ${C.line}`, background: "#fff", color: C.ink, fontSize: 12 }}>
+                  <span style={{ flex: 1 }}>{t.name}</span>
+                  <button onClick={() => moveTag(i, -1)} disabled={i === 0} style={{ background: "none", padding: 4, opacity: i === 0 ? 0.25 : 1 }} aria-label="上に移動">
+                    <ChevLeft size={13} color={C.inkSoft} style={{ transform: "rotate(90deg)" }} />
+                  </button>
+                  <button onClick={() => moveTag(i, 1)} disabled={i === tags.length - 1} style={{ background: "none", padding: 4, opacity: i === tags.length - 1 ? 0.25 : 1 }} aria-label="下に移動">
+                    <ChevLeft size={13} color={C.inkSoft} style={{ transform: "rotate(-90deg)" }} />
+                  </button>
+                  <button onClick={() => removeTag(t.id)} style={{ background: "none", padding: 4, display: "flex" }} aria-label={`${t.name}を削除`}><XIcon size={13} /></button>
                 </div>
               ))}
               {tags.length === 0 && <p className="sans" style={{ color: C.inkSoft, fontSize: 12 }}>まだタグがありません。</p>}
@@ -520,7 +564,7 @@ function App() {
               <div style={{ display: "flex", gap: 8 }}>
                 <input value={newTag} onChange={(ev) => setNewTag(ev.target.value)} onKeyDown={(ev) => ev.key === "Enter" && addTag()}
                   placeholder="例)食費" className="sans" style={{ flex: 1, padding: "7px 10px", outline: "none", fontSize: 12, color: C.ink, background: C.paper, border: `1px solid ${C.line}`, borderRadius: 6 }} />
-                <button onClick={addTag} disabled={!newTag.trim() || tags.includes(newTag.trim())} className="sans" style={{ padding: "0 16px", background: C.ink, color: C.paper, borderRadius: 10, fontSize: 12, fontWeight: 500, opacity: (!newTag.trim() || tags.includes(newTag.trim())) ? 0.5 : 1 }}>追加</button>
+                <button onClick={addTag} disabled={!newTag.trim() || tags.some((x) => x.name === newTag.trim())} className="sans" style={{ padding: "0 16px", background: C.ink, color: C.paper, borderRadius: 10, fontSize: 12, fontWeight: 500, opacity: (!newTag.trim() || tags.some((x) => x.name === newTag.trim())) ? 0.5 : 1 }}>追加</button>
               </div>
             </div>
           </div>
