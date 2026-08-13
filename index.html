@@ -26,13 +26,13 @@
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
 
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@500;700&family=Noto+Sans+JP:wght@400;500;700&family=JetBrains+Mono:wght@500;700&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700;900&family=Nunito:wght@600;700;800&display=swap');
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; height: 100%; overflow: hidden; }
   #root { height: 100%; }
-  .serif { font-family: 'Shippori Mincho', serif; }
-  .sans { font-family: 'Noto Sans JP', sans-serif; }
-  .num { font-family: 'JetBrains Mono', monospace; }
+  .serif { font-family: 'Zen Maru Gothic', sans-serif; font-weight: 900; }
+  .sans { font-family: 'Zen Maru Gothic', sans-serif; font-weight: 500; }
+  .num { font-family: 'Nunito', sans-serif; }
   input, button { font-family: inherit; }
   button { cursor: pointer; border: none; }
 </style>
@@ -44,10 +44,11 @@
 const { useState, useEffect, useMemo } = React;
 
 const C = {
-  paper: "#FAF6EC", paperDeep: "#F1EAD9", line: "#DDD3B8",
-  ink: "#1E2A44", inkSoft: "#5B6480", stamp: "#B23A2E", moss: "#4B7A5B",
+  paper: "#FFF6EE", paperDeep: "#FFE7D9", line: "#FFDCC2",
+  ink: "#8A5A45", inkSoft: "#C08A6E", stamp: "#FF9270", moss: "#E8A33D",
 };
-const STAMP_COLORS = ["#B23A2E", "#2E5E8C", "#4B7A5B", "#8C6A2E", "#6A4B8C", "#2E8C82"];
+const GRADIENT = "linear-gradient(135deg, #FF9270, #FFC9A8)";
+const STAMP_COLORS = ["#FF9270", "#F76C6C", "#E8834A", "#FF8FA3", "#F4A261", "#D9765A"];
 
 const fmtYen = (n) => `¥${Math.round(Number(n || 0)).toLocaleString("ja-JP")}`;
 const todayISO = () => new Date().toISOString().slice(0, 10);
@@ -85,16 +86,17 @@ const ChevLeft = (p) => <Icon {...p}><path d="M15 6l-6 6 6 6"/></Icon>;
 const ChevRight = (p) => <Icon {...p}><path d="M9 6l6 6-6 6"/></Icon>;
 const RepeatIcon = (p) => <Icon {...p}><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></Icon>;
 const BackspaceIcon = (p) => <Icon {...p}><path d="M21 4H8l-6 8 6 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/><path d="M14 10l-4 4M10 10l4 4"/></Icon>;
+const CheckIcon = (p) => <Icon {...p}><path d="M20 6L9 17l-5-5"/></Icon>;
 
 function Stamp({ member, size = 32 }) {
   if (!member) return null;
   return (
     <div style={{
-      width: size, height: size, borderRadius: "9999px", background: "#fff",
-      border: `2px solid ${member.color}`, color: member.color, display: "flex",
-      alignItems: "center", justifyContent: "center", fontFamily: "'Shippori Mincho', serif",
-      fontWeight: 700, fontSize: size * 0.42, transform: "rotate(-6deg)",
-      boxShadow: `inset 0 0 0 1px ${member.color}33`, flexShrink: 0,
+      width: size, height: size, borderRadius: "9999px", background: member.color,
+      color: "#fff", display: "flex",
+      alignItems: "center", justifyContent: "center", fontFamily: "'Zen Maru Gothic', sans-serif",
+      fontWeight: 700, fontSize: size * 0.42,
+      boxShadow: "0 2px 5px rgba(0,0,0,0.12)", flexShrink: 0,
     }} title={member.name}>{member.name.slice(0, 1)}</div>
   );
 }
@@ -118,6 +120,8 @@ function App() {
   const [entries, setEntries] = useState([]);
   const [recurring, setRecurring] = useState([]);
   const [tags, setTags] = useState([]);
+  const [settlements, setSettlements] = useState({});
+  const [confirmPaid, setConfirmPaid] = useState(false);
   const [view, setView] = useState("home");
   const [error, setError] = useState("");
   const [viewMonth, setViewMonth] = useState(monthKeyOf(todayISO()));
@@ -148,7 +152,7 @@ function App() {
     if (!db) return;
     let loadedCount = 0;
     let done = false;
-    const markLoaded = () => { loadedCount++; if (loadedCount >= 4 && !done) { done = true; setLoading(false); } };
+    const markLoaded = () => { loadedCount++; if (loadedCount >= 5 && !done) { done = true; setLoading(false); } };
     const timeout = setTimeout(() => {
       if (!done) { done = true; setError("接続がタイムアウトしました。Firestoreの設定を確認してください。"); setLoading(false); }
     }, 10000);
@@ -165,12 +169,31 @@ function App() {
     const unsubR = db.collection("recurring").onSnapshot((snap) => {
       setRecurring(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); markLoaded();
     }, () => { setError("繰り返し設定の取得に失敗しました。"); markLoaded(); });
+    const unsubS = db.collection("settlements").onSnapshot((snap) => {
+      const obj = {};
+      snap.docs.forEach((d) => { obj[d.id] = !!d.data().paid; });
+      setSettlements(obj); markLoaded();
+    }, () => { setError("支払い状況の取得に失敗しました。"); markLoaded(); });
 
-    return () => { clearTimeout(timeout); unsubM(); unsubT(); unsubE(); unsubR(); };
+    return () => { clearTimeout(timeout); unsubM(); unsubT(); unsubE(); unsubR(); unsubS(); };
   }, [db]);
 
   useEffect(() => { if (members.length && !memberId) setMemberId(members[0].id); }, [members]);
   useEffect(() => { if (tags.length && !tag) setTag(tags[0]); }, [tags]);
+  useEffect(() => { setConfirmPaid(false); }, [viewMonth]);
+  useEffect(() => {
+    if (!confirmPaid) return;
+    const t = setTimeout(() => setConfirmPaid(false), 2500);
+    return () => clearTimeout(t);
+  }, [confirmPaid]);
+
+  const isPaid = !!settlements[viewMonth];
+  const handlePaidTap = async () => {
+    if (!confirmPaid) { setConfirmPaid(true); return; }
+    setConfirmPaid(false);
+    try { await db.collection("settlements").doc(viewMonth).set({ paid: !isPaid }); }
+    catch { setError("支払い状況の更新に失敗しました。"); }
+  };
 
   const addMember = async () => {
     if (!newName.trim() || !db) return;
@@ -304,27 +327,38 @@ function App() {
 
         {view === "home" && (
           <div style={page}>
-            <div style={{ background: C.ink, padding: "14px 20px 12px", flexShrink: 0 }}>
-              <h1 className="serif" style={{ color: C.paper, fontSize: 17, margin: 0 }}>家計帳</h1>
+            <div style={{ background: GRADIENT, padding: "16px 20px 14px", flexShrink: 0, borderRadius: "0 0 22px 22px" }}>
+              <h1 className="serif" style={{ color: "#fff", fontSize: 17, margin: 0 }}>🍑 家計帳</h1>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginTop: 4 }}>
                 <button onClick={() => setViewMonth((v) => shiftMonth(v, -1))} style={{ background: "none", padding: 2 }}><ChevLeft color="#fff" size={16} /></button>
                 <span className="sans" style={{ color: "#fff", fontSize: 13 }}>{fmtMonthJp(viewMonth)}</span>
                 <button onClick={() => setViewMonth((v) => shiftMonth(v, 1))} style={{ background: "none", padding: 2 }}><ChevRight color="#fff" size={16} /></button>
               </div>
               <div style={{ textAlign: "center", marginTop: 4 }}>
-                <span className="sans" style={{ color: "#ffffff99", fontSize: 10 }}>合計</span>
-                <div className="num" style={{ color: C.paper, fontSize: 26, fontWeight: 700, lineHeight: 1.2 }}>{fmtYen(monthTotal)}</div>
+                <span className="sans" style={{ color: "#ffffffcc", fontSize: 10 }}>合計</span>
+                <div className="num" style={{ color: "#fff", fontSize: 26, fontWeight: 800, lineHeight: 1.2 }}>{fmtYen(monthTotal)}</div>
               </div>
             </div>
 
             {split && (
-              <div className="sans" style={{ flexShrink: 0, margin: "8px 16px 0", padding: "8px 12px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8, fontSize: 12, color: C.ink, display: "flex", alignItems: "center", gap: 6 }}>
-                {split.even ? "🧮 今のところ割り勘の差はありません" : (
+              <div className="sans" style={{ flexShrink: 0, margin: "8px 16px 0", padding: "8px 12px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 12, fontSize: 12, color: C.ink, display: "flex", alignItems: "center", gap: 6 }}>
+                {split.even ? (
+                  <span>🧮 今のところ割り勘の差はありません</span>
+                ) : (
                   <React.Fragment>
                     <Stamp member={split.payer} size={20} />
-                    <span>{split.payer.name}が{split.receiver.name}に</span>
-                    <span className="num" style={{ fontWeight: 700 }}>{fmtYen(split.amount)}</span>
-                    <span>払う</span>
+                    <span style={{ flex: 1, textDecoration: isPaid ? "line-through" : "none", opacity: isPaid ? 0.5 : 1 }}>
+                      {split.payer.name}が{split.receiver.name}に <span className="num" style={{ fontWeight: 700 }}>{fmtYen(split.amount)}</span> 払う
+                    </span>
+                    <button onClick={handlePaidTap} className="sans" style={{
+                      flexShrink: 0, display: "flex", alignItems: "center", gap: 3, padding: "4px 8px", borderRadius: 999, fontSize: 10,
+                      background: isPaid ? C.moss : confirmPaid ? "#F5D9A8" : C.paperDeep,
+                      color: isPaid ? "#fff" : confirmPaid ? "#7A4E10" : C.inkSoft,
+                      border: `1px solid ${isPaid ? C.moss : confirmPaid ? "#E0B060" : C.line}`,
+                    }}>
+                      <CheckIcon size={11} color={isPaid ? "#fff" : confirmPaid ? "#7A4E10" : C.inkSoft} />
+                      {isPaid ? "支払い済み" : confirmPaid ? "もう一度タップ" : "未払い"}
+                    </button>
                   </React.Fragment>
                 )}
               </div>
@@ -371,7 +405,7 @@ function App() {
               ) : grouped.map(([d, list]) => (
                 <div key={d} style={{ marginBottom: 8 }}>
                   <div className="sans" style={{ color: C.inkSoft, fontSize: 10, marginBottom: 3 }}>{fmtDateJp(d)}</div>
-                  <div style={{ background: "#fff", borderRadius: 8, border: `1px solid ${C.line}` }}>
+                  <div style={{ background: "#fff", borderRadius: 12, border: `1px solid ${C.line}` }}>
                     {list.map((e, i) => (
                       <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderBottom: i < list.length - 1 ? `1px solid ${C.line}` : "none" }}>
                         <Stamp member={memberOf(e.memberId)} size={24} />
@@ -403,7 +437,7 @@ function App() {
               </p>
             ) : (
               <React.Fragment>
-                <div style={{ flexShrink: 0, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 10, padding: 8 }}>
+                <div style={{ flexShrink: 0, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 16, padding: 8 }}>
                   <div className="sans" style={{ fontSize: 10, color: C.inkSoft, textAlign: "right", minHeight: 12, overflow: "hidden", whiteSpace: "nowrap" }}>{exprPreview}</div>
                   <div className="num" style={{ fontSize: 26, fontWeight: 700, color: C.ink, textAlign: "right" }}>{fmtYen(liveTotal)}</div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 5, marginTop: 6 }}>
@@ -431,13 +465,13 @@ function App() {
                 </div>
 
                 <input value={memo} onChange={(ev) => setMemo(ev.target.value)} placeholder="メモ(任意)"
-                  className="sans" style={{ flexShrink: 0, width: "100%", marginTop: 8, padding: "7px 10px", outline: "none", fontSize: 12, color: C.ink, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }} />
+                  className="sans" style={{ flexShrink: 0, width: "100%", marginTop: 8, padding: "7px 10px", outline: "none", fontSize: 12, color: C.ink, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 12 }} />
 
                 <div style={{ flexShrink: 0, display: "flex", gap: 6, marginTop: 8, alignItems: "center" }}>
                   <input type="date" value={date} onChange={(ev) => setDate(ev.target.value)}
-                    className="sans" style={{ flex: 1, padding: "7px 8px", outline: "none", fontSize: 12, color: C.ink, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }} />
+                    className="sans" style={{ flex: 1, padding: "7px 8px", outline: "none", fontSize: 12, color: C.ink, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 12 }} />
                   <button onClick={() => setIsRecurring((v) => !v)} className="sans" style={{
-                    display: "flex", alignItems: "center", gap: 4, padding: "7px 10px", borderRadius: 8, fontSize: 11,
+                    display: "flex", alignItems: "center", gap: 4, padding: "7px 10px", borderRadius: 12, fontSize: 11,
                     border: `1px solid ${isRecurring ? C.moss : C.line}`, background: isRecurring ? C.moss : "#fff", color: isRecurring ? "#fff" : C.inkSoft,
                   }}><RepeatIcon size={12} color={isRecurring ? "#fff" : C.inkSoft} />繰り返す</button>
                 </div>
@@ -445,7 +479,7 @@ function App() {
                   <div style={{ flexShrink: 0, display: "flex", gap: 6, marginTop: 6 }}>
                     {[["monthly", "毎月"], ["yearly", "毎年"]].map(([k, l]) => (
                       <button key={k} onClick={() => setFreq(k)} className="sans" style={{
-                        flex: 1, padding: "6px 0", borderRadius: 8, fontSize: 11,
+                        flex: 1, padding: "6px 0", borderRadius: 12, fontSize: 11,
                         border: `1px solid ${freq === k ? C.ink : C.line}`, background: freq === k ? C.ink : "#fff", color: freq === k ? C.paper : C.inkSoft,
                       }}>{l}</button>
                     ))}
@@ -463,7 +497,7 @@ function App() {
                 <div style={{ flex: 1 }} />
                 <button onClick={addEntry} disabled={!liveTotal || liveTotal <= 0 || !tag} className="sans" style={{
                   flexShrink: 0, width: "100%", padding: "11px", background: C.stamp, color: "#fff",
-                  borderRadius: 8, fontWeight: 700, fontSize: 14, opacity: (!liveTotal || liveTotal <= 0 || !tag) ? 0.5 : 1,
+                  borderRadius: 12, fontWeight: 700, fontSize: 14, opacity: (!liveTotal || liveTotal <= 0 || !tag) ? 0.5 : 1,
                 }}>記録する</button>
               </React.Fragment>
             )}
@@ -482,11 +516,11 @@ function App() {
               ))}
               {tags.length === 0 && <p className="sans" style={{ color: C.inkSoft, fontSize: 12 }}>まだタグがありません。</p>}
             </div>
-            <div style={{ flexShrink: 0, padding: 10, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8, marginTop: 8 }}>
+            <div style={{ flexShrink: 0, padding: 10, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 12, marginTop: 8 }}>
               <div style={{ display: "flex", gap: 8 }}>
                 <input value={newTag} onChange={(ev) => setNewTag(ev.target.value)} onKeyDown={(ev) => ev.key === "Enter" && addTag()}
                   placeholder="例)食費" className="sans" style={{ flex: 1, padding: "7px 10px", outline: "none", fontSize: 12, color: C.ink, background: C.paper, border: `1px solid ${C.line}`, borderRadius: 6 }} />
-                <button onClick={addTag} disabled={!newTag.trim() || tags.includes(newTag.trim())} className="sans" style={{ padding: "0 16px", background: C.ink, color: C.paper, borderRadius: 6, fontSize: 12, fontWeight: 500, opacity: (!newTag.trim() || tags.includes(newTag.trim())) ? 0.5 : 1 }}>追加</button>
+                <button onClick={addTag} disabled={!newTag.trim() || tags.includes(newTag.trim())} className="sans" style={{ padding: "0 16px", background: C.ink, color: C.paper, borderRadius: 10, fontSize: 12, fontWeight: 500, opacity: (!newTag.trim() || tags.includes(newTag.trim())) ? 0.5 : 1 }}>追加</button>
               </div>
             </div>
           </div>
@@ -497,7 +531,7 @@ function App() {
             <h2 className="serif" style={{ color: C.ink, fontSize: 15, margin: "0 0 8px" }}>メンバー</h2>
             <div style={{ ...scrollArea, display: "flex", flexDirection: "column", gap: 6 }}>
               {members.map((m) => (
-                <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 10px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }}>
+                <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 10px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 12 }}>
                   <Stamp member={m} size={28} />
                   <div className="sans" style={{ flex: 1, fontSize: 13, color: C.ink, fontWeight: 500 }}>{m.name}</div>
                   <button onClick={() => removeMember(m.id)} style={{ background: "none", display: "flex" }} aria-label="削除"><XIcon size={14} /></button>
@@ -505,12 +539,12 @@ function App() {
               ))}
               {members.length === 0 && <p className="sans" style={{ color: C.inkSoft, fontSize: 12 }}>まだメンバーがいません。</p>}
             </div>
-            <div style={{ flexShrink: 0, padding: 10, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8, marginTop: 8 }}>
+            <div style={{ flexShrink: 0, padding: 10, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 12, marginTop: 8 }}>
               <div style={{ display: "flex", gap: 8 }}>
                 <input value={newName} onChange={(ev) => setNewName(ev.target.value)} onKeyDown={(ev) => ev.key === "Enter" && addMember()} placeholder="名前(例:たろう)"
                   className="sans" style={{ flex: 1, padding: "7px 10px", outline: "none", fontSize: 12, color: C.ink, background: C.paper, border: `1px solid ${C.line}`, borderRadius: 6 }} />
                 <button onClick={addMember} disabled={!newName.trim()} className="sans" style={{
-                  padding: "0 16px", background: C.ink, color: C.paper, borderRadius: 6, fontSize: 12, fontWeight: 500,
+                  padding: "0 16px", background: C.ink, color: C.paper, borderRadius: 10, fontSize: 12, fontWeight: 500,
                   opacity: !newName.trim() ? 0.5 : 1,
                 }}>追加</button>
               </div>
@@ -518,7 +552,7 @@ function App() {
           </div>
         )}
 
-                       <div style={{ flexShrink: 0 }}>
+        <div style={{ flexShrink: 0 }}>
           <div style={{ display: "flex", borderTop: `1px solid ${C.line}`, background: "#fff" }}>
             {[
               { key: "add", label: "記録", Icon: PlusIcon },
@@ -542,7 +576,7 @@ function App() {
 function CalcBtn({ children, onClick, style }) {
   return (
     <button onClick={onClick} className="num" style={{
-      height: 38, borderRadius: 8, background: "#F1EAD9", color: "#1E2A44", fontSize: 15, fontWeight: 700,
+      height: 38, borderRadius: 12, background: "#FFE7D9", color: "#8A5A45", fontSize: 15, fontWeight: 700,
       display: "flex", alignItems: "center", justifyContent: "center", ...style,
     }}>{children}</button>
   );
