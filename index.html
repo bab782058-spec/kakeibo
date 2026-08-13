@@ -436,9 +436,12 @@ function App() {
 
   return (
     <div style={{ background: C.paper, height: "100%", display: "flex", justifyContent: "center" }}>
-      <div style={{ width: "100%", maxWidth: 448, height: "100%", display: "flex", flexDirection: "column" }}>
+            <div style={{ width: "100%", maxWidth: 448, height: "100%", display: "flex", flexDirection: "column" }}>
+
+        <div style={{ flexShrink: 0, height: "calc(env(safe-area-inset-top, 0px) + 12px)", background: C.paper }} />
 
         {error && (
+
           <div className="sans" style={{ padding: "6px 16px", background: "#fff", borderBottom: `1px solid ${C.stamp}`, color: C.stamp, fontSize: 11 }}>{error}</div>
         )}
 
