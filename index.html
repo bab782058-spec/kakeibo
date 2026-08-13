@@ -515,18 +515,21 @@ function App() {
           </div>
         )}
 
-        <div style={{ flexShrink: 0, display: "flex", borderTop: `1px solid ${C.line}`, background: "#fff" }}>
-          {[
-            { key: "add", label: "記録", Icon: PlusIcon },
-            { key: "home", label: "帳簿", Icon: BookIcon },
-            { key: "tags", label: "タグ", Icon: TagIcon },
-            { key: "members", label: "メンバー", Icon: UsersIcon },
-          ].map(({ key, label, Icon: I }) => (
-            <button key={key} onClick={() => setView(key)} style={{ flex: 1, background: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "8px 0" }}>
-              <I color={view === key ? C.stamp : C.inkSoft} size={17} />
-              <span className="sans" style={{ fontSize: 9, color: view === key ? C.stamp : C.inkSoft }}>{label}</span>
-            </button>
-          ))}
+                       <div style={{ flexShrink: 0 }}>
+          <div style={{ display: "flex", borderTop: `1px solid ${C.line}`, background: "#fff" }}>
+            {[
+              { key: "add", label: "記録", Icon: PlusIcon },
+              { key: "home", label: "帳簿", Icon: BookIcon },
+              { key: "tags", label: "タグ", Icon: TagIcon },
+              { key: "members", label: "メンバー", Icon: UsersIcon },
+            ].map(({ key, label, Icon: I }) => (
+              <button key={key} onClick={() => setView(key)} style={{ flex: 1, background: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "8px 0" }}>
+                <I color={view === key ? C.stamp : C.inkSoft} size={17} />
+                <span className="sans" style={{ fontSize: 9, color: view === key ? C.stamp : C.inkSoft }}>{label}</span>
+              </button>
+            ))}
+          </div>
+          <div style={{ height: "calc(env(safe-area-inset-bottom, 0px) + 16px)", background: C.paper }} />
         </div>
       </div>
     </div>
