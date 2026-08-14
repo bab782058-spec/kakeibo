@@ -137,7 +137,7 @@ function App() {
   const [tags, setTags] = useState([]);
   const [settlements, setSettlements] = useState({});
   const [confirmPaid, setConfirmPaid] = useState(false);
-  const [view, setView] = useState("home");
+  const [view, setView] = useState("add");
   const [error, setError] = useState("");
   const [viewMonth, setViewMonth] = useState(monthKeyOf(todayISO()));
 
@@ -159,14 +159,23 @@ function App() {
   const [editMemo, setEditMemo] = useState("");
   const [justSaved, setJustSaved] = useState(false);
 
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+
   useEffect(() => {
     try {
       firebase.initializeApp(window.FIREBASE_CONFIG);
-      setDb(firebase.firestore());
+      const fdb = firebase.firestore();
+      fdb.enablePersistence({ synchronizeTabs: true }).catch(() => {});
+      setDb(fdb);
     } catch (err) {
       setError("Firebaseへの接続に失敗しました。");
       setLoading(false);
     }
+    const onOnline = () => setIsOffline(false);
+    const onOffline = () => setIsOffline(true);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => { window.removeEventListener("online", onOnline); window.removeEventListener("offline", onOffline); };
   }, []);
 
   useEffect(() => {
@@ -218,14 +227,33 @@ function App() {
     catch { setError("支払い状況の更新に失敗しました。"); }
   };
 
+  const [hiddenIds, setHiddenIds] = useState({});
+  const [pendingDeletes, setPendingDeletes] = useState([]);
+  const pendingTimers = useRef({});
+
+  const deleteWithUndo = (key, label, deleteFn) => {
+    setHiddenIds((prev) => ({ ...prev, [key]: true }));
+    setPendingDeletes((prev) => [...prev.filter((p) => p.key !== key), { key, label }]);
+    pendingTimers.current[key] = setTimeout(async () => {
+      delete pendingTimers.current[key];
+      setPendingDeletes((prev) => prev.filter((p) => p.key !== key));
+      try { await deleteFn(); } catch { setError("削除に失敗しました。"); }
+    }, 3500);
+  };
+  const undoDelete = (key) => {
+    if (pendingTimers.current[key]) { clearTimeout(pendingTimers.current[key]); delete pendingTimers.current[key]; }
+    setHiddenIds((prev) => { const n = { ...prev }; delete n[key]; return n; });
+    setPendingDeletes((prev) => prev.filter((p) => p.key !== key));
+  };
+
   const addMember = async () => {
     if (!newName.trim() || !db) return;
     const color = STAMP_COLORS[members.length % STAMP_COLORS.length];
     try { await db.collection("members").add({ name: newName.trim(), color }); setNewName(""); }
     catch { setError("メンバーの追加に失敗しました。"); }
   };
-  const removeMember = async (id) => {
-    try { await db.collection("members").doc(id).delete(); } catch { setError("削除に失敗しました。"); }
+  const removeMember = (m) => {
+    deleteWithUndo(`m_${m.id}`, `${m.name}を削除しました`, () => db.collection("members").doc(m.id).delete());
   };
   const addTag = async () => {
     const t = newTag.trim();
@@ -233,9 +261,8 @@ function App() {
     try { await db.collection("tags").add({ name: t, order: tags.length }); setNewTag(""); }
     catch { setError("タグの追加に失敗しました。"); }
   };
-  const removeTag = async (id) => {
-    try { await db.collection("tags").doc(id).delete(); }
-    catch { setError("削除に失敗しました。"); }
+  const removeTag = (t) => {
+    deleteWithUndo(`t_${t.id}`, `${t.name}を削除しました`, () => db.collection("tags").doc(t.id).delete());
   };
   const moveTag = async (index, dir) => {
     const target = index + dir;
@@ -255,7 +282,9 @@ function App() {
   const dragOrigIndex = useRef(0);
   const ITEM_H = 42;
 
-  const displayTags = dragOrder || tags;
+  const displayTags = (dragOrder || tags).filter((t) => !hiddenIds[`t_${t.id}`]);
+  const visibleMembers = useMemo(() => members.filter((m) => !hiddenIds[`m_${m.id}`]), [members, hiddenIds]);
+  const visibleTags = useMemo(() => tags.filter((t) => !hiddenIds[`t_${t.id}`]), [tags, hiddenIds]);
 
   const handleDragStart = (t, index, clientY) => {
     dragStartY.current = clientY;
@@ -295,6 +324,38 @@ function App() {
     } catch { setError("並び替えに失敗しました。"); }
   };
 
+  // 履歴のスワイプ削除
+  const [swipeId, setSwipeId] = useState(null);
+  const [swipeX, setSwipeX] = useState(0);
+  const swipeStartX = useRef(0);
+  const swipeStartY = useRef(0);
+  const swipeActive = useRef(false);
+  const onRowTouchStart = (id, ev) => {
+    swipeStartX.current = ev.touches[0].clientX;
+    swipeStartY.current = ev.touches[0].clientY;
+    swipeActive.current = false;
+    setSwipeId(id);
+    setSwipeX((prev) => (id === swipeId ? prev : 0));
+  };
+  const onRowTouchMove = (id, ev) => {
+    if (swipeId !== id) return;
+    const dx = ev.touches[0].clientX - swipeStartX.current;
+    const dy = ev.touches[0].clientY - swipeStartY.current;
+    if (!swipeActive.current) {
+      if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) swipeActive.current = true;
+      else if (Math.abs(dy) > 8) return;
+    }
+    if (swipeActive.current) {
+      ev.preventDefault();
+      setSwipeX(Math.max(-72, Math.min(0, dx)));
+    }
+  };
+  const onRowTouchEnd = (id) => {
+    if (swipeId !== id) return;
+    setSwipeX((cur) => (swipeActive.current && cur < -36 ? -72 : 0));
+    swipeActive.current = false;
+  };
+
   const resetCalc = () => { setCalcTokens([]); setCalcInput("0"); };
   const pressDigit = (d) => setCalcInput((cur) => (cur === "0" ? d : cur.length < 9 ? cur + d : cur));
   const pressBackspace = () => setCalcInput((cur) => (cur.length > 1 ? cur.slice(0, -1) : "0"));
@@ -320,11 +381,12 @@ function App() {
       setTimeout(() => setJustSaved(false), 900);
     } catch { setError("記録の保存に失敗しました。"); }
   };
-  const removeEntry = async (e) => {
-    try {
-      if (e.isRecurring) await db.collection("recurring").doc(e.recurringId).delete();
-      else await db.collection("entries").doc(e.id).delete();
-    } catch { setError("削除に失敗しました。"); }
+  const removeEntry = (e) => {
+    deleteWithUndo(`e_${e.id}`, `${e.tag}(${fmtYen(e.amount)})を削除しました`, () => {
+      return e.isRecurring
+        ? db.collection("recurring").doc(e.recurringId).delete()
+        : db.collection("entries").doc(e.id).delete();
+    });
   };
   const startEditEntry = (e) => {
     setEditEntryId(e.id);
@@ -368,8 +430,10 @@ function App() {
     return [...actual, ...virtual];
   };
 
-  const monthEntries = useMemo(() => getMonthEntries(viewMonth), [entries, recurring, viewMonth]);
-  const prevMonthEntries = useMemo(() => getMonthEntries(shiftMonth(viewMonth, -1)), [entries, recurring, viewMonth]);
+  const monthEntriesRaw = useMemo(() => getMonthEntries(viewMonth), [entries, recurring, viewMonth]);
+  const prevMonthEntriesRaw = useMemo(() => getMonthEntries(shiftMonth(viewMonth, -1)), [entries, recurring, viewMonth]);
+  const monthEntries = useMemo(() => monthEntriesRaw.filter((e) => !hiddenIds[`e_${e.id}`]), [monthEntriesRaw, hiddenIds]);
+  const prevMonthEntries = useMemo(() => prevMonthEntriesRaw.filter((e) => !hiddenIds[`e_${e.id}`]), [prevMonthEntriesRaw, hiddenIds]);
 
   const monthTotal = useMemo(() => monthEntries.reduce((s, e) => s + Number(e.amount), 0), [monthEntries]);
   const prevMonthTotal = useMemo(() => prevMonthEntries.reduce((s, e) => s + Number(e.amount), 0), [prevMonthEntries]);
@@ -439,13 +503,19 @@ function App() {
 
         <div style={{ flexShrink: 0, height: "calc(env(safe-area-inset-top, 0px) + 12px)", background: C.paper }} />
 
+        {isOffline && (
+          <div className="sans" style={{ padding: "5px 16px", background: C.paperDeep, color: C.ink, fontSize: 11, textAlign: "center", flexShrink: 0 }}>
+            オフライン中・つながったら自動で同期されます
+          </div>
+        )}
+
         {error && (
           <div className="sans" style={{ padding: "6px 16px", background: "#fff", borderBottom: `1px solid ${C.stamp}`, color: C.stamp, fontSize: 11 }}>{error}</div>
         )}
 
         {view === "home" && (
           <div style={page}>
-            <div style={{ background: GRADIENT, padding: "16px 20px 14px", flexShrink: 0, borderRadius: "0 0 22px 22px" }}>
+            <div style={{ background: GRADIENT, filter: `hue-rotate(${(Number(viewMonth.slice(5, 7)) - 8) * 6}deg)`, padding: "16px 20px 14px", flexShrink: 0, borderRadius: "0 0 22px 22px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <h1 className="serif" style={{ color: "#fff", fontSize: 17, margin: 0 }}>家計帳</h1>
                 <button
@@ -593,7 +663,23 @@ function App() {
                           </div>
                         </div>
                       ) : (
-                      <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderBottom: i < list.length - 1 ? `1px solid ${C.line}` : "none" }}>
+                      <div key={e.id} style={{ position: "relative", overflow: "hidden", borderBottom: i < list.length - 1 ? `1px solid ${C.line}` : "none" }}>
+                        <div
+                          onClick={() => { removeEntry(e); setSwipeId(null); setSwipeX(0); }}
+                          style={{ position: "absolute", top: 0, right: 0, bottom: 0, width: 72, background: C.stamp, display: "flex", alignItems: "center", justifyContent: "center" }}
+                        >
+                          <TrashIcon size={16} color="#fff" />
+                        </div>
+                        <div
+                          onTouchStart={(ev) => onRowTouchStart(e.id, ev)}
+                          onTouchMove={(ev) => onRowTouchMove(e.id, ev)}
+                          onTouchEnd={() => onRowTouchEnd(e.id)}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "#fff",
+                            transform: `translateX(${swipeId === e.id ? swipeX : 0}px)`,
+                            transition: swipeId === e.id && swipeActive.current ? "none" : "transform .2s ease",
+                          }}
+                        >
                         <Stamp member={memberOf(e.memberId)} size={24} />
                         <div onClick={() => startEditEntry(e)} style={{ flex: 1, minWidth: 0 }}>
                           <div className="sans" style={{ color: C.ink, fontSize: 12, fontWeight: 500, display: "flex", alignItems: "center", gap: 3 }}>
@@ -606,7 +692,7 @@ function App() {
                         </div>
                         <div className="num" style={{ color: C.ink, fontSize: 13, fontWeight: 700 }}>{fmtYen(e.amount)}</div>
                         <button onClick={() => startEditEntry(e)} style={{ background: "none", display: "flex" }} aria-label="編集"><PencilIcon size={12} /></button>
-                        <button onClick={() => removeEntry(e)} style={{ background: "none" }} aria-label="削除"><TrashIcon size={13} /></button>
+                        </div>
                       </div>
                       )
                     ))}
@@ -654,7 +740,7 @@ function App() {
                 </div>
 
                 <div style={{ flexShrink: 0, display: "flex", flexWrap: "nowrap", gap: 6, marginTop: 8, overflowX: "auto", paddingBottom: 2 }}>
-                  {tags.map((t) => (
+                  {visibleTags.map((t) => (
                     <button key={t.id} onClick={() => setTag(t.name)} className="sans" style={{
                       flexShrink: 0, borderRadius: 999, padding: "5px 12px", fontSize: 11,
                       border: `1px solid ${tag === t.name ? C.ink : C.line}`,
@@ -686,7 +772,7 @@ function App() {
                 )}
 
                 <div style={{ flexShrink: 0, display: "flex", gap: 8, marginTop: 8 }}>
-                  {members.map((m) => (
+                  {visibleMembers.map((m) => (
                     <button key={m.id} onClick={() => setMemberId(m.id)} style={{ background: "none", display: "flex", flexDirection: "column", alignItems: "center" }}>
                       <div style={{ opacity: memberId === m.id ? 1 : 0.4 }}><Stamp member={m} size={28} /></div>
                     </button>
@@ -731,7 +817,7 @@ function App() {
                     <GripIcon size={15} color={C.inkSoft} />
                   </button>
                   <span style={{ flex: 1 }}>{t.name}</span>
-                  <button onClick={() => removeTag(t.id)} style={{ background: "none", padding: 4, display: "flex" }} aria-label={`${t.name}を削除`}><XIcon size={13} /></button>
+                  <button onClick={() => removeTag(t)} style={{ background: "none", padding: 4, display: "flex" }} aria-label={`${t.name}を削除`}><XIcon size={13} /></button>
                 </div>
               ))}
               {tags.length === 0 && <p className="sans" style={{ color: C.inkSoft, fontSize: 12 }}>まだタグがありません。</p>}
@@ -750,14 +836,14 @@ function App() {
           <div style={{ ...page, padding: "14px 16px" }}>
             <h2 className="serif" style={{ color: C.ink, fontSize: 15, margin: "0 0 8px" }}>メンバー</h2>
             <div style={{ ...scrollArea, display: "flex", flexDirection: "column", gap: 6 }}>
-              {members.map((m) => (
+              {visibleMembers.map((m) => (
                 <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 10px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 12 }}>
                   <Stamp member={m} size={28} />
                   <div className="sans" style={{ flex: 1, fontSize: 13, color: C.ink, fontWeight: 500 }}>{m.name}</div>
-                  <button onClick={() => removeMember(m.id)} style={{ background: "none", display: "flex" }} aria-label="削除"><XIcon size={14} /></button>
+                  <button onClick={() => removeMember(m)} style={{ background: "none", display: "flex" }} aria-label="削除"><XIcon size={14} /></button>
                 </div>
               ))}
-              {members.length === 0 && <p className="sans" style={{ color: C.inkSoft, fontSize: 12 }}>まだメンバーがいません。</p>}
+              {visibleMembers.length === 0 && <p className="sans" style={{ color: C.inkSoft, fontSize: 12 }}>まだメンバーがいません。</p>}
             </div>
             <div style={{ flexShrink: 0, padding: 10, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 12, marginTop: 8 }}>
               <div style={{ display: "flex", gap: 8 }}>
@@ -769,6 +855,20 @@ function App() {
                 }}>追加</button>
               </div>
             </div>
+          </div>
+        )}
+
+        {pendingDeletes.length > 0 && (
+          <div style={{ flexShrink: 0, padding: "0 16px 6px", display: "flex", flexDirection: "column", gap: 6 }}>
+            {pendingDeletes.map((p) => (
+              <div key={p.key} className="sans" style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+                background: C.ink, color: "#fff", borderRadius: 10, padding: "8px 12px", fontSize: 11,
+              }}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.label}</span>
+                <button onClick={() => undoDelete(p.key)} style={{ background: "none", color: C.stamp, fontWeight: 700, flexShrink: 0 }}>元に戻す</button>
+              </div>
+            ))}
           </div>
         )}
 
