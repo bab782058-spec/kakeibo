@@ -315,7 +315,6 @@ function App() {
       resetCalc(); setMemo(""); setIsRecurring(false);
       setJustSaved(true);
       setTimeout(() => setJustSaved(false), 900);
-      setTimeout(() => setView("home"), 350);
     } catch { setError("記録の保存に失敗しました。"); }
   };
   const removeEntry = async (e) => {
@@ -344,10 +343,10 @@ function App() {
     } catch { setError("記録の更新に失敗しました。"); }
   };
 
-  // 選択中の月について、実際の記録 + 繰り返しの仮想記録 を合成する
-  const monthEntries = useMemo(() => {
-    const [y, m] = viewMonth.split("-").map(Number);
-    const actual = entries.filter((e) => monthKeyOf(e.date) === viewMonth);
+  // 指定した月について、実際の記録 + 繰り返しの仮想記録 を合成する
+  const getMonthEntries = (mk) => {
+    const [y, m] = mk.split("-").map(Number);
+    const actual = entries.filter((e) => monthKeyOf(e.date) === mk);
     const virtual = [];
     recurring.forEach((r) => {
       if (!r.anchorDate) return;
@@ -355,38 +354,35 @@ function App() {
       if (r.frequency === "monthly") {
         if (y > ay || (y === ay && m >= am)) {
           const day = Math.min(ad, daysInMonth(y, m));
-          virtual.push({ id: `rec_${r.id}_${viewMonth}`, amount: r.amount, tag: r.tag, memo: r.memo, memberId: r.memberId, date: `${y}-${pad2(m)}-${pad2(day)}`, isRecurring: true, recurringId: r.id, freq: r.frequency });
+          virtual.push({ id: `rec_${r.id}_${mk}`, amount: r.amount, tag: r.tag, memo: r.memo, memberId: r.memberId, date: `${y}-${pad2(m)}-${pad2(day)}`, isRecurring: true, recurringId: r.id, freq: r.frequency });
         }
       } else if (r.frequency === "yearly") {
         if (m === am && y >= ay) {
-          virtual.push({ id: `rec_${r.id}_${viewMonth}`, amount: r.amount, tag: r.tag, memo: r.memo, memberId: r.memberId, date: `${y}-${pad2(am)}-${pad2(ad)}`, isRecurring: true, recurringId: r.id, freq: r.frequency });
+          virtual.push({ id: `rec_${r.id}_${mk}`, amount: r.amount, tag: r.tag, memo: r.memo, memberId: r.memberId, date: `${y}-${pad2(am)}-${pad2(ad)}`, isRecurring: true, recurringId: r.id, freq: r.frequency });
         }
       }
     });
     return [...actual, ...virtual];
-  }, [entries, recurring, viewMonth]);
+  };
+
+  const monthEntries = useMemo(() => getMonthEntries(viewMonth), [entries, recurring, viewMonth]);
+  const prevMonthEntries = useMemo(() => getMonthEntries(shiftMonth(viewMonth, -1)), [entries, recurring, viewMonth]);
 
   const monthTotal = useMemo(() => monthEntries.reduce((s, e) => s + Number(e.amount), 0), [monthEntries]);
-
-  const monthlyTrend = useMemo(() => {
-    const arr = [];
-    for (let i = 5; i >= 0; i--) {
-      const mk = shiftMonth(viewMonth, -i);
-      const [y, m] = mk.split("-").map(Number);
-      let total = entries.filter((e) => monthKeyOf(e.date) === mk).reduce((s, e) => s + Number(e.amount), 0);
-      recurring.forEach((r) => {
-        if (!r.anchorDate) return;
-        const [ay, am] = r.anchorDate.split("-").map(Number);
-        if (r.frequency === "monthly") { if (y > ay || (y === ay && m >= am)) total += Number(r.amount); }
-        else if (r.frequency === "yearly") { if (m === am && y >= ay) total += Number(r.amount); }
-      });
-      arr.push({ mk, total });
-    }
-    return arr;
-  }, [entries, recurring, viewMonth]);
-  const maxTrend = Math.max(1, ...monthlyTrend.map((x) => x.total));
-  const prevMonthTotal = monthlyTrend[4] ? monthlyTrend[4].total : 0;
+  const prevMonthTotal = useMemo(() => prevMonthEntries.reduce((s, e) => s + Number(e.amount), 0), [prevMonthEntries]);
   const pctChange = prevMonthTotal > 0 ? Math.round(((monthTotal - prevMonthTotal) / prevMonthTotal) * 100) : null;
+
+  // タグを1つ選んでその前月比を見る
+  const [trendTag, setTrendTag] = useState("");
+  useEffect(() => { if (tags.length && !trendTag) setTrendTag(tags[0].name); }, [tags]);
+  const tagTrend = useMemo(() => {
+    if (!trendTag) return null;
+    const cur = monthEntries.filter((e) => e.tag === trendTag).reduce((s, e) => s + Number(e.amount), 0);
+    const prev = prevMonthEntries.filter((e) => e.tag === trendTag).reduce((s, e) => s + Number(e.amount), 0);
+    const diff = cur - prev;
+    const pct = prev > 0 ? Math.round((diff / prev) * 100) : (cur > 0 ? null : 0);
+    return { cur, prev, diff, pct };
+  }, [monthEntries, prevMonthEntries, trendTag]);
 
   const byTag = useMemo(() => {
     const map = {};
@@ -436,12 +432,11 @@ function App() {
 
   return (
     <div style={{ background: C.paper, height: "100%", display: "flex", justifyContent: "center" }}>
-            <div style={{ width: "100%", maxWidth: 448, height: "100%", display: "flex", flexDirection: "column" }}>
+      <div style={{ width: "100%", maxWidth: 448, height: "100%", display: "flex", flexDirection: "column" }}>
 
         <div style={{ flexShrink: 0, height: "calc(env(safe-area-inset-top, 0px) + 12px)", background: C.paper }} />
 
         {error && (
-
           <div className="sans" style={{ padding: "6px 16px", background: "#fff", borderBottom: `1px solid ${C.stamp}`, color: C.stamp, fontSize: 11 }}>{error}</div>
         )}
 
@@ -492,22 +487,35 @@ function App() {
               </div>
             )}
 
-            <div style={{ flexShrink: 0, display: "flex", alignItems: "flex-end", gap: 5, margin: "8px 16px 0", padding: "6px 10px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 12, height: 44 }}>
-              {monthlyTrend.map((x, idx) => (
-                <div key={x.mk} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
-                  <div style={{
-                    width: "70%", borderRadius: 3, height: `${Math.max(6, (x.total / maxTrend) * 26)}px`,
-                    background: x.mk === viewMonth ? C.stamp : C.paperDeep,
-                  }} />
-                  <span className="sans" style={{ fontSize: 7, color: x.mk === viewMonth ? C.stamp : C.inkSoft, marginTop: 2 }}>{x.mk.slice(5)}月</span>
+            <div style={{ flexShrink: 0, margin: "8px 16px 0", padding: "8px 10px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 12 }}>
+              <div style={{ display: "flex", gap: 5, overflowX: "auto", paddingBottom: 4 }}>
+                {tags.map((tg) => (
+                  <button key={tg.id} onClick={() => setTrendTag(tg.name)} className="sans" style={{
+                    flexShrink: 0, borderRadius: 999, padding: "3px 10px", fontSize: 10,
+                    border: `1px solid ${trendTag === tg.name ? C.ink : C.line}`,
+                    background: trendTag === tg.name ? C.ink : C.paper, color: trendTag === tg.name ? "#fff" : C.inkSoft,
+                  }}>{tg.name}</button>
+                ))}
+              </div>
+              {tagTrend && (
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginTop: 4 }}>
+                  <span className="sans" style={{ fontSize: 10, color: C.inkSoft }}>{trendTag}・今月 {fmtYen(tagTrend.cur)}</span>
+                  <span className="num" style={{
+                    fontSize: 11, fontWeight: 700,
+                    color: tagTrend.diff > 0 ? C.stamp : tagTrend.diff < 0 ? C.moss : C.inkSoft,
+                  }}>
+                    {tagTrend.diff > 0 ? "▲" : tagTrend.diff < 0 ? "▼" : "―"} {fmtYen(Math.abs(tagTrend.diff))}
+                    {tagTrend.pct !== null && ` (${tagTrend.pct > 0 ? "+" : ""}${tagTrend.pct}%)`} 先月比
+                  </span>
                 </div>
-              ))}
+              )}
             </div>
 
             <div style={{ flexShrink: 0, display: "flex", gap: 10, margin: "8px 16px 0" }}>
-              <div style={{ flex: 1 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <div className="sans" style={{ fontSize: 10, color: C.inkSoft, marginBottom: 3 }}>タグ別</div>
-                {byTag.slice(0, 3).map(([t, sum]) => (
+                <div style={{ maxHeight: 86, overflowY: "auto" }}>
+                {byTag.map(([t, sum]) => (
                   <div key={t} style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
                     <span className="sans" style={{ fontSize: 9, color: C.inkSoft, width: 36, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t}</span>
                     <div style={{ flex: 1, height: 4, borderRadius: 999, background: C.paperDeep }}>
@@ -517,10 +525,11 @@ function App() {
                   </div>
                 ))}
                 {byTag.length === 0 && <div className="sans" style={{ fontSize: 10, color: C.inkSoft }}>記録なし</div>}
+                </div>
               </div>
               <div style={{ flex: 1 }}>
                 <div className="sans" style={{ fontSize: 10, color: C.inkSoft, marginBottom: 3 }}>人別</div>
-                {byMember.slice(0, 3).map(([mid, sum]) => {
+                {byMember.map(([mid, sum]) => {
                   const m = memberOf(mid);
                   if (!m) return null;
                   return (
@@ -599,12 +608,12 @@ function App() {
         {view === "add" && (
           <div style={{ ...page, padding: "12px 16px", position: "relative" }}>
             {justSaved && (
-              <div className="save-pop" style={{
+              <div className="sans save-pop" style={{
                 position: "absolute", top: "38%", left: "50%", transform: "translate(-50%,-50%)",
                 zIndex: 10, background: C.stamp, color: "#fff", borderRadius: 999,
-                width: 76, height: 76, display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 34, boxShadow: "0 8px 20px rgba(255,146,112,0.5)",
-              }}>🍑</div>
+                padding: "10px 24px", display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 15, fontWeight: 700, boxShadow: "0 8px 20px rgba(255,146,112,0.5)", whiteSpace: "nowrap",
+              }}>Saved</div>
             )}
             {(members.length === 0 || tags.length === 0) ? (
               <p className="sans" style={{ color: C.inkSoft, fontSize: 13 }}>
