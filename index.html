@@ -40,17 +40,13 @@
   .num { font-family: 'Nunito', sans-serif; }
   input, button { font-family: inherit; }
   button { cursor: pointer; border: none; }
-  @keyframes bouncePop {
-    0% { transform: scale(0.3) rotate(-8deg); opacity: 0; }
-    55% { transform: scale(1.2) rotate(4deg); opacity: 1; }
-    75% { transform: scale(0.92) rotate(-2deg); }
-    100% { transform: scale(1) rotate(0deg); opacity: 1; }
+  @keyframes fadeInOut {
+    0% { opacity: 0; }
+    18% { opacity: 1; }
+    75% { opacity: 1; }
+    100% { opacity: 0; }
   }
-  @keyframes fadeOutUp {
-    0% { opacity: 1; transform: translateY(0); }
-    100% { opacity: 0; transform: translateY(-24px); }
-  }
-  .save-pop { animation: bouncePop 0.35s cubic-bezier(.34,1.56,.64,1), fadeOutUp 0.3s ease 0.5s forwards; }
+  .save-pop { animation: fadeInOut 1.1s ease forwards; }
 </style>
 </head>
 <body>
@@ -619,10 +615,10 @@ function App() {
           <div style={{ ...page, padding: "12px 16px", position: "relative" }}>
             {justSaved && (
               <div className="sans save-pop" style={{
-                position: "absolute", top: "38%", left: "50%", transform: "translate(-50%,-50%)",
-                zIndex: 10, background: C.stamp, color: "#fff", borderRadius: 999,
-                padding: "10px 24px", display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 15, fontWeight: 700, boxShadow: "0 8px 20px rgba(255,146,112,0.5)", whiteSpace: "nowrap",
+                position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+                zIndex: 50, background: C.stamp, color: "#fff", borderRadius: 20,
+                padding: "20px 44px", display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 24, fontWeight: 700, boxShadow: "0 12px 28px rgba(255,146,112,0.5)", whiteSpace: "nowrap",
               }}>Saved</div>
             )}
             {(members.length === 0 || tags.length === 0) ? (
