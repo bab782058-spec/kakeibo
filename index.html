@@ -267,18 +267,24 @@ function App() {
   const handleDragMove = (t, clientY) => {
     if (dragId !== t.id) return;
     const delta = clientY - dragStartY.current;
-    setDragOffset(delta);
     const shift = Math.round(delta / ITEM_H);
-    const newIndex = Math.min(tags.length - 1, Math.max(0, dragOrigIndex.current + shift));
-    setDragOrder((prev) => {
-      const cur = prev || tags;
-      const fromIndex = cur.findIndex((x) => x.id === t.id);
-      if (fromIndex === -1 || fromIndex === newIndex) return cur;
-      const next = [...cur];
-      const [item] = next.splice(fromIndex, 1);
-      next.splice(newIndex, 0, item);
-      return next;
-    });
+    if (shift !== 0) {
+      const newIndex = Math.min(tags.length - 1, Math.max(0, dragOrigIndex.current + shift));
+      if (newIndex !== dragOrigIndex.current) {
+        setDragOrder((prev) => {
+          const cur = prev || tags;
+          const fromIndex = cur.findIndex((x) => x.id === t.id);
+          if (fromIndex === -1 || fromIndex === newIndex) return cur;
+          const next = [...cur];
+          const [item] = next.splice(fromIndex, 1);
+          next.splice(newIndex, 0, item);
+          return next;
+        });
+        dragStartY.current += (newIndex - dragOrigIndex.current) * ITEM_H;
+        dragOrigIndex.current = newIndex;
+      }
+    }
+    setDragOffset(clientY - dragStartY.current);
   };
   const handleDragEnd = async () => {
     const finalOrder = dragOrder;
@@ -441,7 +447,7 @@ function App() {
           <div style={page}>
             <div style={{ background: GRADIENT, padding: "16px 20px 14px", flexShrink: 0, borderRadius: "0 0 22px 22px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <h1 className="serif" style={{ color: "#fff", fontSize: 17, margin: 0 }}>🍑 家計帳</h1>
+                <h1 className="serif" style={{ color: "#fff", fontSize: 17, margin: 0 }}>家計帳</h1>
                 <button
                   onClick={() => { window.location.href = window.location.pathname + "?_=" + Date.now(); }}
                   style={{ background: "rgba(255,255,255,0.25)", borderRadius: 999, padding: 6, display: "flex" }}
@@ -630,12 +636,12 @@ function App() {
             ) : (
               <React.Fragment>
                 {/* 電卓 */}
-                <div style={{ flexShrink: 0, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 16, padding: 8 }}>
-                  <div className="sans" style={{ fontSize: 10, color: C.inkSoft, textAlign: "right", minHeight: 12, overflow: "hidden", whiteSpace: "nowrap" }}>{exprPreview}</div>
-                  <div className="num" style={{ fontSize: 26, fontWeight: 700, color: C.ink, textAlign: "right" }}>{fmtYen(liveTotal)}</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 5, marginTop: 6 }}>
+                <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 16, padding: 8 }}>
+                  <div className="sans" style={{ fontSize: 10, color: C.inkSoft, textAlign: "right", minHeight: 12, overflow: "hidden", whiteSpace: "nowrap", flexShrink: 0 }}>{exprPreview}</div>
+                  <div className="num" style={{ fontSize: 26, fontWeight: 700, color: C.ink, textAlign: "right", flexShrink: 0 }}>{fmtYen(liveTotal)}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gridTemplateRows: "repeat(4,1fr)", gap: 6, marginTop: 6, flex: 1, minHeight: 0 }}>
                     {["7","8","9"].map((d) => <CalcBtn key={d} onClick={() => pressDigit(d)}>{d}</CalcBtn>)}
-                    <CalcBtn onClick={pressBackspace} style={{ background: C.paperDeep }}><BackspaceIcon size={14} /></CalcBtn>
+                    <CalcBtn onClick={pressBackspace} style={{ background: C.paperDeep }}><BackspaceIcon size={16} /></CalcBtn>
                     {["4","5","6"].map((d) => <CalcBtn key={d} onClick={() => pressDigit(d)}>{d}</CalcBtn>)}
                     <CalcBtn onClick={resetCalc} style={{ background: C.paperDeep, color: C.stamp }}>C</CalcBtn>
                     {["1","2","3"].map((d) => <CalcBtn key={d} onClick={() => pressDigit(d)}>{d}</CalcBtn>)}
@@ -687,9 +693,8 @@ function App() {
                   ))}
                 </div>
 
-                <div style={{ flex: 1 }} />
                 <button onClick={addEntry} disabled={!liveTotal || liveTotal <= 0 || !tag} className="sans" style={{
-                  flexShrink: 0, width: "100%", padding: "11px", background: C.stamp, color: "#fff",
+                  flexShrink: 0, width: "100%", padding: "11px", marginTop: 10, background: C.stamp, color: "#fff",
                   borderRadius: 12, fontWeight: 700, fontSize: 14, opacity: (!liveTotal || liveTotal <= 0 || !tag) ? 0.5 : 1,
                 }}>記録する</button>
               </React.Fragment>
@@ -791,7 +796,7 @@ function App() {
 function CalcBtn({ children, onClick, style }) {
   return (
     <button onClick={onClick} className="num" style={{
-      height: 38, borderRadius: 12, background: "#FFE7D9", color: "#8A5A45", fontSize: 15, fontWeight: 700,
+      width: "100%", height: "100%", borderRadius: 12, background: "#FFE7D9", color: "#8A5A45", fontSize: 18, fontWeight: 700,
       display: "flex", alignItems: "center", justifyContent: "center", ...style,
     }}>{children}</button>
   );
